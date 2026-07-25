@@ -34,7 +34,7 @@
     .topbar { display:flex; gap:10px; align-items:center; margin-bottom:10px; }
     .title { font-weight:800; letter-spacing:.02em; flex:1; }
     .badge { color:var(--muted); font-size:12px; }
-    .tabs { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin-bottom:10px; }
+    .tabs { display:grid; grid-template-columns:repeat(4,1fr); gap:7px; margin-bottom:10px; }
     .tab {
       min-height:44px; border-radius:12px; border:1px solid var(--border);
       background:var(--panel); color:var(--text); font-weight:750;
@@ -50,23 +50,33 @@
       display:flex; align-items:center; justify-content:center;
       touch-action:none;
     }
-    video, #drawCanvas {
+    video, #layerCanvas, #drawCanvas, #activeTextCanvas, #topLayerCanvas {
       position:absolute; inset:0; width:100%; height:100%; object-fit:contain;
+      transform-origin:center center; will-change:transform;
     }
     video { background:#000; }
+    #layerCanvas { z-index:1; pointer-events:none; }
     #drawCanvas { z-index:2; }
+    #activeTextCanvas { z-index:3; pointer-events:none; }
+    #topLayerCanvas { z-index:4; pointer-events:none; }
     .empty {
-      position:absolute; inset:0; z-index:3; display:grid; place-items:center;
+      position:absolute; inset:0; z-index:5; display:grid; place-items:center;
       text-align:center; color:var(--muted); padding:28px; pointer-events:none;
     }
     .empty strong { color:var(--text); display:block; margin-bottom:8px; }
     .hidden { display:none !important; }
     .hud {
-      position:absolute; z-index:4; top:10px; left:10px; right:10px;
+      position:absolute; z-index:6; top:10px; left:10px; right:10px;
       display:flex; justify-content:space-between; pointer-events:none;
       text-shadow:0 1px 4px #000;
     }
     .hud span { background:#0009; border-radius:8px; padding:6px 8px; font-variant-numeric:tabular-nums; }
+    .stage-action {
+      position:absolute; z-index:7; right:9px; bottom:9px; min-height:38px;
+      border:1px solid #ffffff35; border-radius:11px; padding:6px 10px;
+      color:#fff; background:#111b; font-weight:800; backdrop-filter:blur(8px);
+    }
+    .stage-action.off { color:var(--muted); opacity:.82; }
     .scrub { width:100%; accent-color:var(--accent); margin:12px 0 4px; }
     .transport { display:grid; grid-template-columns:repeat(5,1fr); gap:7px; margin:8px 0; }
     .btn {
@@ -87,7 +97,7 @@
     .row { display:flex; gap:7px; margin-top:9px; }
     .row > * { flex:1; }
     .toolbar {
-      display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:7px;
+      display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px;
       margin:9px 0;
     }
     .tool.active { outline:2px solid var(--accent); background:var(--panel2); }
@@ -129,11 +139,132 @@
       padding:12px; margin-top:10px;
     }
     .progress { width:100%; accent-color:var(--accent); }
+    .zoom-row {
+      display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px;
+      align-items:center; margin-top:8px;
+    }
+    .zoom-label {
+      min-width:64px; text-align:center; color:var(--muted);
+      font-size:13px; font-variant-numeric:tabular-nums;
+    }
+    .layer-head {
+      display:flex; align-items:center; gap:8px; margin:12px 0 7px;
+    }
+    .layer-head .section-title { flex:1; margin:0; }
+    .layer-list { display:grid; gap:6px; }
+    .layer-item {
+      display:grid; grid-template-columns:42px minmax(0,1fr) auto;
+      gap:6px; align-items:center; padding:6px;
+      border:1px solid var(--border); border-radius:12px; background:var(--panel);
+    }
+    .layer-item.active { border-color:var(--accent); background:var(--panel2); }
+    .layer-eye,.layer-name,.layer-mini {
+      min-height:36px; border:1px solid var(--border); border-radius:9px;
+      background:transparent; color:var(--text);
+    }
+    .layer-eye { font-size:16px; }
+    .layer-eye.off { opacity:.45; }
+    .layer-name {
+      min-width:0; text-align:left; padding:5px 9px; font-weight:750;
+      overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    }
+    .layer-actions { display:flex; gap:4px; }
+    .layer-mini { min-width:34px; padding:2px 7px; }
+    .layer-mini.delete { color:var(--danger); }
+    .project-head { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; }
+    .project-list { display:grid; gap:8px; margin-top:10px; }
+    .project-item {
+      display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px;
+      align-items:center; padding:10px; border:1px solid var(--border);
+      border-radius:12px; background:#0f1219;
+    }
+    .project-item.current { border-color:var(--accent); }
+    .project-name { font-weight:800; overflow-wrap:anywhere; }
+    .project-meta { margin-top:3px; color:var(--muted); font-size:12px; }
+    .project-actions { display:flex; gap:5px; }
+    .autosave {
+      display:flex; align-items:center; gap:7px; min-height:28px;
+      margin-top:8px; color:var(--muted); font-size:13px;
+    }
+    .autosave-dot { width:8px; height:8px; border-radius:50%; background:#30d158; }
+    .autosave.saving .autosave-dot { background:#ffd60a; }
+    .autosave.error .autosave-dot { background:var(--danger); }
+    .text-controls {
+      display:grid; grid-template-columns:minmax(160px,1fr) auto auto;
+      gap:7px; align-items:end; padding:9px; margin:8px 0;
+      border:1px solid var(--accent); border-radius:12px; background:#ff4fa30d;
+    }
+    .text-controls .range-wrap { min-width:140px; }
+    .compare-shell { display:grid; gap:9px; }
+    .compare-videos {
+      display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px;
+      min-height:0;
+    }
+    .compare-videos.overlay { grid-template-columns:minmax(0,1fr); }
+    .compare-pane {
+      min-width:0; border:1px solid var(--border); border-radius:14px;
+      overflow:hidden; background:#000;
+    }
+    .compare-videos.overlay .compare-pane { grid-area:1/1; }
+    .compare-videos.overlay .compare-pane:last-child {
+      opacity:var(--compare-opacity,.5); pointer-events:none; background:transparent;
+    }
+    .compare-videos.overlay .compare-pane:last-child .compare-video-wrap,
+    .compare-videos.overlay .compare-pane:last-child video { background:transparent; }
+    .compare-label {
+      position:absolute; z-index:2; top:7px; left:7px;
+      padding:5px 8px; border-radius:8px; background:#000a;
+      font-size:12px; font-weight:800; pointer-events:none;
+    }
+    .compare-video-wrap {
+      position:relative; width:100%; aspect-ratio:16/9;
+      display:grid; place-items:center; background:#000;
+    }
+    .compare-video-wrap video {
+      position:absolute; inset:0; width:100%; height:100%;
+      object-fit:contain; transform:none !important;
+    }
+    .compare-empty {
+      color:var(--muted); text-align:center; font-size:13px;
+      padding:20px; pointer-events:none;
+    }
+    .compare-transport {
+      display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:7px;
+    }
+    .compare-tools {
+      display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px;
+    }
+    .compare-scrub { width:100%; accent-color:var(--accent); }
+    .marker-track {
+      position:relative; height:30px; border:1px solid var(--border);
+      border-radius:10px; background:var(--panel); overflow:hidden;
+    }
+    .marker-line { position:absolute; left:8px; right:8px; top:14px; height:2px; background:var(--border); }
+    .marker-dot {
+      position:absolute; top:6px; width:18px; height:18px; border:2px solid #fff;
+      border-radius:50%; transform:translateX(-50%); padding:0;
+    }
+    .marker-dot.fix { background:#ff453a; }
+    .marker-dot.check { background:#ffd60a; }
+    .marker-dot.ok { background:#30d158; }
+    .marker-list { display:grid; gap:6px; }
+    .marker-item {
+      display:grid; grid-template-columns:auto auto minmax(0,1fr) auto;
+      align-items:center; gap:8px; padding:8px;
+      border:1px solid var(--border); border-radius:11px; background:var(--panel);
+    }
+    .marker-kind { width:12px; height:12px; border-radius:50%; }
+    .marker-kind.fix { background:#ff453a; }
+    .marker-kind.check { background:#ffd60a; }
+    .marker-kind.ok { background:#30d158; }
     input[type=file] { display:none; }
     @media (max-width:680px) {
       .toolbar { grid-template-columns:repeat(3,1fr); }
       .grid { grid-template-columns:repeat(2,1fr); }
       .btn { font-size:13px; padding:4px; }
+      .text-controls { grid-template-columns:1fr 1fr; }
+      .text-controls .range-wrap { grid-column:1/-1; }
+      .compare-tools { grid-template-columns:repeat(2,1fr); }
     }
     @media (orientation:landscape) and (max-height:600px) {
       html,body { height:100%; }
@@ -198,10 +329,24 @@
       .editor-column .history-row {
         display:grid; grid-template-columns:repeat(3,minmax(0,1fr));
       }
+      .editor-column .zoom-row { margin-top:5px; }
+      .editor-column .layer-head { margin:7px 0 4px; }
+      .editor-column .layer-item { padding:4px; gap:4px; }
+      .editor-column .layer-eye,
+      .editor-column .layer-name,
+      .editor-column .layer-mini { min-height:32px; font-size:11px; }
+      .editor-column .layer-item { grid-template-columns:34px minmax(0,1fr) auto; }
+      .editor-column .layer-mini { min-width:30px; padding:1px 5px; }
       .editor-column .status { min-height:17px; margin-top:4px; font-size:11px; }
       .hud { top:6px; left:6px; right:6px; }
       .hud span { padding:4px 6px; font-size:11px; }
       .empty { padding:15px; font-size:12px; }
+      #comparePanel.active { overflow-y:auto; }
+      .compare-shell { min-height:100%; }
+      .compare-videos { height:min(50dvh,210px); }
+      .compare-pane,.compare-video-wrap { height:100%; }
+      .compare-video-wrap { aspect-ratio:auto; }
+      .compare-transport .btn,.compare-tools .btn { min-height:36px; font-size:11px; }
     }
   </style>
 </head>
@@ -209,11 +354,12 @@
 <main class="app">
   <div class="topbar">
     <div class="title">Animation Coach</div>
-    <div class="badge">v0.3</div>
+    <div class="badge">v0.5</div>
   </div>
 
   <div class="tabs" role="tablist">
     <button class="tab active" data-tab="videoPanel">🎥 動画</button>
+    <button class="tab" data-tab="comparePanel">⚖️ 比較</button>
     <button class="tab" data-tab="memoPanel">📝 メモ</button>
     <button class="tab" data-tab="exportPanel">💾 保存</button>
   </div>
@@ -223,7 +369,10 @@
       <div class="video-column">
         <div class="stage" id="stage">
           <video id="video" playsinline preload="metadata"></video>
+          <canvas id="layerCanvas"></canvas>
           <canvas id="drawCanvas"></canvas>
+          <canvas id="activeTextCanvas"></canvas>
+          <canvas id="topLayerCanvas"></canvas>
           <div class="empty" id="empty">
             <div><strong>動画を読み込む</strong>「動画を選ぶ」から写真・ファイル内の動画を選択</div>
           </div>
@@ -231,6 +380,7 @@
             <span id="frameHud">F 0</span>
             <span id="timeHud">00:00.000</span>
           </div>
+          <button id="toggleAllLayers" class="stage-action" type="button" aria-pressed="true">👁 書込 ON</button>
         </div>
 
         <input id="scrub" class="scrub" type="range" min="0" max="1000" value="0" step="1">
@@ -266,14 +416,29 @@
           <button class="btn small" id="loop">ABループ OFF</button>
         </div>
 
+        <div class="zoom-row">
+          <button class="btn small" id="resetView">元の大きさに戻す</button>
+          <span class="zoom-label" id="zoomLabel">100%</span>
+        </div>
+
         <div class="section-title" style="margin-top:12px;">書き込み</div>
         <div class="toolbar">
           <button class="btn small tool active" data-tool="pen">✏️ ペン</button>
           <button class="btn small tool" data-tool="line">／ 直線</button>
           <button class="btn small tool" data-tool="arrow">➜ 矢印</button>
           <button class="btn small tool" data-tool="circle">◯ 円</button>
+          <button class="btn small tool" data-tool="text">Ｔ 文字</button>
           <button class="btn small tool" data-tool="eraser">消しゴム</button>
           <button class="btn small" id="clearDrawing">全消去</button>
+        </div>
+
+        <div id="textControls" class="text-controls hidden">
+          <div class="range-wrap">
+            <label for="textSize">文字サイズ <span id="textSizeValue">36</span>px</label>
+            <input id="textSize" type="range" min="16" max="96" value="36">
+          </div>
+          <button class="btn small" id="editText">文字編集</button>
+          <button class="btn small danger" id="deleteText">文字削除</button>
         </div>
 
         <div class="color-row">
@@ -288,6 +453,12 @@
           </div>
         </div>
 
+        <div class="layer-head">
+          <div class="section-title">レイヤー</div>
+          <button class="btn small" id="addLayer" style="min-height:38px;padding:4px 12px;">＋レイヤー</button>
+        </div>
+        <div id="layerList" class="layer-list"></div>
+
         <div class="row history-row">
           <button class="btn small" id="undo">↶ Undo</button>
           <button class="btn small" id="redo">↷ Redo</button>
@@ -295,6 +466,61 @@
         </div>
         <div id="status" class="status" aria-live="polite"></div>
       </div>
+    </div>
+  </section>
+
+  <section class="panel" id="comparePanel">
+    <div class="compare-shell">
+      <div class="compare-videos" id="compareVideos">
+        <div class="compare-pane">
+          <div class="compare-video-wrap">
+            <div class="compare-label">参考動画</div>
+            <video id="compareRefVideo" playsinline preload="metadata"></video>
+            <div class="compare-empty" id="compareRefEmpty">参考動画を選択</div>
+          </div>
+        </div>
+        <div class="compare-pane">
+          <div class="compare-video-wrap">
+            <div class="compare-label">自分のモーション</div>
+            <video id="compareOwnVideo" playsinline muted preload="metadata"></video>
+            <div class="compare-empty" id="compareOwnEmpty">自分の動画を選択</div>
+          </div>
+        </div>
+      </div>
+
+      <input id="compareScrub" class="compare-scrub" type="range" min="0" max="1000" value="0" step="1">
+      <div style="display:flex;justify-content:space-between;color:var(--muted);font-variant-numeric:tabular-nums;">
+        <span id="compareFrameHud">F 0</span><span id="compareTimeHud">00:00.000</span>
+      </div>
+
+      <div class="compare-transport">
+        <button class="btn" id="compareBack5">−5F</button>
+        <button class="btn" id="compareBack1">−1F</button>
+        <button class="btn primary" id="comparePlay">▶︎</button>
+        <button class="btn" id="compareNext1">+1F</button>
+        <button class="btn" id="compareNext5">+5F</button>
+      </div>
+
+      <div class="compare-tools">
+        <label class="btn small" for="compareRefFile" style="display:grid;place-items:center;">参考動画を選ぶ</label>
+        <input id="compareRefFile" type="file" accept="video/*">
+        <label class="btn small" for="compareOwnFile" style="display:grid;place-items:center;">自分の動画を選ぶ</label>
+        <input id="compareOwnFile" type="file" accept="video/*">
+        <button class="btn small" id="compareMode">半透明で重ねる</button>
+        <div class="field">
+          <label for="compareOpacity">重ね透明度 <span id="compareOpacityValue">50</span>%</label>
+          <input id="compareOpacity" type="range" min="10" max="90" value="50" style="width:100%;accent-color:var(--accent);">
+        </div>
+      </div>
+
+      <div class="section-title">判定マーカー</div>
+      <div class="marker-track" id="markerTrack"><div class="marker-line"></div></div>
+      <div class="row">
+        <button class="btn small" id="markerFix" style="color:#ff6b6b;">● 要修正</button>
+        <button class="btn small" id="markerCheck" style="color:#ffd60a;">● 確認</button>
+        <button class="btn small" id="markerOk" style="color:#30d158;">● OK</button>
+      </div>
+      <div id="markerList" class="marker-list"></div>
     </div>
   </section>
 
@@ -332,7 +558,22 @@
       <div id="exportStatus" class="status" aria-live="polite"></div>
     </div>
 
-    <div class="section-title" style="margin-top:16px;">プロジェクト</div>
+    <div class="section-title" style="margin-top:16px;">自動保存プロジェクト</div>
+    <div class="export-box">
+      <div class="project-head">
+        <div class="field">
+          <label for="projectNameInput">現在のプロジェクト名</label>
+          <input id="projectNameInput" maxlength="80" value="無題のプロジェクト">
+        </div>
+        <button class="btn small" id="newProject">＋ 新規</button>
+      </div>
+      <div id="autosaveStatus" class="autosave" aria-live="polite">
+        <span class="autosave-dot"></span><span>自動保存を準備中…</span>
+      </div>
+      <div id="projectList" class="project-list"></div>
+    </div>
+
+    <div class="section-title" style="margin-top:16px;">手動バックアップ</div>
     <div class="row">
       <button class="btn small" id="downloadProject">メモ・書き込みを保存</button>
       <label class="btn small" for="importProject" style="display:grid;place-items:center;">プロジェクト読込</label>
@@ -340,12 +581,12 @@
     </div>
 
     <div class="help">
-      動画ファイル自体はプロジェクトJSONに含まれません。再開時は同じ動画を選択してからJSONを読み込んでください。
+      編集内容と動画はこの端末内に自動保存され、次回は前回の続きから再開します。手動バックアップのJSONには動画ファイル自体は含まれません。
     </div>
   </section>
 </main>
 
-<script>
+<script type="text/plain" id="legacy-v03">
 (() => {
   const $ = id => document.getElementById(id);
   const video = $('video'), canvas = $('drawCanvas'), ctx = canvas.getContext('2d');
@@ -756,5 +997,6 @@
   resizeCanvas(); renderMemos(); update();
 })();
 </script>
+<script src="./app.js"></script>
 </body>
 </html>
