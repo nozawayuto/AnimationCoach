@@ -198,19 +198,26 @@
     .compare-shell { display:grid; gap:9px; }
     .compare-videos {
       display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px;
-      min-height:0;
+      min-height:0; touch-action:none;
     }
-    .compare-videos.overlay { grid-template-columns:minmax(0,1fr); }
+    .compare-videos.overlay,.compare-videos.difference { grid-template-columns:minmax(0,1fr); }
     .compare-pane {
       min-width:0; border:1px solid var(--border); border-radius:14px;
       overflow:hidden; background:#000;
     }
-    .compare-videos.overlay .compare-pane { grid-area:1/1; }
+    .compare-videos.overlay .compare-pane,
+    .compare-videos.difference .compare-pane { grid-area:1/1; }
     .compare-videos.overlay .compare-pane:last-child {
       opacity:var(--compare-opacity,.5); pointer-events:none; background:transparent;
     }
     .compare-videos.overlay .compare-pane:last-child .compare-video-wrap,
     .compare-videos.overlay .compare-pane:last-child video { background:transparent; }
+    .compare-videos.difference .compare-pane:last-child {
+      opacity:1; pointer-events:none; background:transparent;
+      mix-blend-mode:difference;
+    }
+    .compare-videos.difference .compare-pane:last-child .compare-video-wrap,
+    .compare-videos.difference .compare-pane:last-child video { background:transparent; }
     .compare-label {
       position:absolute; z-index:2; top:7px; left:7px;
       padding:5px 8px; border-radius:8px; background:#000a;
@@ -222,7 +229,7 @@
     }
     .compare-video-wrap video {
       position:absolute; inset:0; width:100%; height:100%;
-      object-fit:contain; transform:none !important;
+      object-fit:contain; transform-origin:center center; will-change:transform;
     }
     .compare-empty {
       color:var(--muted); text-align:center; font-size:13px;
@@ -234,6 +241,17 @@
     .compare-tools {
       display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px;
     }
+    .sync-grid {
+      display:grid; grid-template-columns:repeat(4,minmax(0,1fr));
+      gap:7px; padding:9px; border:1px solid var(--border);
+      border-radius:13px; background:var(--panel);
+    }
+    .compare-adjust {
+      display:grid; grid-template-columns:repeat(4,minmax(0,1fr));
+      gap:7px; align-items:end;
+    }
+    .compare-target.active { outline:2px solid var(--accent); background:var(--panel2); }
+    .compare-hint { color:var(--muted); font-size:12px; line-height:1.4; }
     .compare-scrub { width:100%; accent-color:var(--accent); }
     .marker-track {
       position:relative; height:30px; border:1px solid var(--border);
@@ -257,6 +275,7 @@
     .marker-kind.fix { background:#ff453a; }
     .marker-kind.check { background:#ffd60a; }
     .marker-kind.ok { background:#30d158; }
+    .marker-actions { display:flex; gap:4px; }
     input[type=file] { display:none; }
     @media (max-width:680px) {
       .toolbar { grid-template-columns:repeat(3,1fr); }
@@ -265,6 +284,7 @@
       .text-controls { grid-template-columns:1fr 1fr; }
       .text-controls .range-wrap { grid-column:1/-1; }
       .compare-tools { grid-template-columns:repeat(2,1fr); }
+      .sync-grid,.compare-adjust { grid-template-columns:repeat(2,1fr); }
     }
     @media (orientation:landscape) and (max-height:600px) {
       html,body { height:100%; }
@@ -354,7 +374,7 @@
 <main class="app">
   <div class="topbar">
     <div class="title">Animation Coach</div>
-    <div class="badge">v0.5</div>
+    <div class="badge">v0.6</div>
   </div>
 
   <div class="tabs" role="tablist">
@@ -490,7 +510,7 @@
 
       <input id="compareScrub" class="compare-scrub" type="range" min="0" max="1000" value="0" step="1">
       <div style="display:flex;justify-content:space-between;color:var(--muted);font-variant-numeric:tabular-nums;">
-        <span id="compareFrameHud">F 0</span><span id="compareTimeHud">00:00.000</span>
+        <span id="compareFrameHud">参考 0F / 自作 0F</span><span id="compareTimeHud">00:00.000</span>
       </div>
 
       <div class="compare-transport">
@@ -506,11 +526,52 @@
         <input id="compareRefFile" type="file" accept="video/*">
         <label class="btn small" for="compareOwnFile" style="display:grid;place-items:center;">自分の動画を選ぶ</label>
         <input id="compareOwnFile" type="file" accept="video/*">
-        <button class="btn small" id="compareMode">半透明で重ねる</button>
+        <div class="field">
+          <label for="compareMode">表示方法</label>
+          <select id="compareMode">
+            <option value="side">左右に並べる</option>
+            <option value="overlay">半透明で重ねる</option>
+            <option value="difference">差分表示</option>
+          </select>
+        </div>
         <div class="field">
           <label for="compareOpacity">重ね透明度 <span id="compareOpacityValue">50</span>%</label>
           <input id="compareOpacity" type="range" min="10" max="90" value="50" style="width:100%;accent-color:var(--accent);">
         </div>
+      </div>
+
+      <div class="section-title">同期ポイント</div>
+      <div class="sync-grid">
+        <div class="field">
+          <label for="syncRefFrame">参考動画のフレーム</label>
+          <input id="syncRefFrame" type="number" min="0" value="0" inputmode="numeric">
+        </div>
+        <div class="field">
+          <label for="syncOwnFrame">自作動画のフレーム</label>
+          <input id="syncOwnFrame" type="number" min="0" value="0" inputmode="numeric">
+        </div>
+        <button class="btn small primary" id="applySync">この2点を同期</button>
+        <button class="btn small" id="resetSync">同期をリセット</button>
+      </div>
+
+      <div class="row">
+        <button class="btn small" id="compareSetA">比較A点</button>
+        <button class="btn small" id="compareSetB">比較B点</button>
+        <button class="btn small" id="compareLoop">ABループ OFF</button>
+        <button class="btn small" id="saveCompareImage">比較画像を保存</button>
+      </div>
+
+      <div class="section-title">位置・大きさ調整</div>
+      <div class="compare-adjust">
+        <button class="btn small compare-target active" id="adjustRef">参考を調整</button>
+        <button class="btn small compare-target" id="adjustOwn">自作を調整</button>
+        <div class="field">
+          <label for="compareScale">大きさ <span id="compareScaleValue">100</span>%</label>
+          <input id="compareScale" type="range" min="50" max="300" value="100" style="width:100%;accent-color:var(--accent);">
+        </div>
+        <button class="btn small" id="flipCompare">左右反転</button>
+        <button class="btn small" id="resetCompareTransform">位置・大きさを戻す</button>
+        <div class="compare-hint" style="grid-column:span 3;">動画上を1本指で移動／2本指でピンチ拡大</div>
       </div>
 
       <div class="section-title">判定マーカー</div>

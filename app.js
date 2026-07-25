@@ -55,6 +55,18 @@
   let compareMarkers = [];
   let compareCurrentTime = 0;
   let comparePlaying = false;
+  let compareSyncRefTime = 0;
+  let compareSyncOwnTime = 0;
+  let compareA = null;
+  let compareB = null;
+  let compareLoopOn = false;
+  let compareAdjustTarget = 'ref';
+  let compareTransforms = {
+    ref: { scale: 1, x: 0, y: 0, flip: false },
+    own: { scale: 1, x: 0, y: 0, flip: false }
+  };
+  const comparePointers = new Map();
+  let compareGesture = null;
 
   let layers = [];
   let activeLayerId = '';
@@ -206,7 +218,7 @@
     ensureLayers();
     return {
       id: projectId,
-      version: '0.5',
+      version: '0.6',
       name: projectName,
       createdAt: projectCreatedAt,
       updatedAt: Date.now(),
@@ -234,7 +246,16 @@
         mode: compareMode,
         opacity: compareOpacity,
         markers: compareMarkers.map(marker => ({ ...marker })),
-        currentTime: compareCurrentTime
+        currentTime: compareCurrentTime,
+        syncRefTime: compareSyncRefTime,
+        syncOwnTime: compareSyncOwnTime,
+        A: compareA,
+        B: compareB,
+        loopOn: compareLoopOn,
+        transforms: {
+          ref: { ...compareTransforms.ref },
+          own: { ...compareTransforms.own }
+        }
       },
       view: { zoomScale, panX, panY },
       drawing: { tool, color, brushSize, textSize }
@@ -305,6 +326,15 @@
     return [makeLayer('レイヤー 1')];
   }
 
+  function normalizeCompareTransform(value) {
+    return {
+      scale: clamp(Number(value?.scale) || 1, 0.5, 3),
+      x: clamp(Number(value?.x) || 0, -100, 100),
+      y: clamp(Number(value?.y) || 0, -100, 100),
+      flip: Boolean(value?.flip)
+    };
+  }
+
   function applyProjectRecord(record) {
     restoring = true;
     projectId = record.id || uid();
@@ -338,16 +368,29 @@
         }))
       : [];
     compareOwnVideoName = String(record.compare?.ownVideoName || '');
-    compareMode = record.compare?.mode === 'overlay' ? 'overlay' : 'side';
+    compareMode = ['side', 'overlay', 'difference'].includes(record.compare?.mode)
+      ? record.compare.mode
+      : 'side';
     compareOpacity = clamp(Number(record.compare?.opacity) || 0.5, 0.1, 0.9);
     compareMarkers = Array.isArray(record.compare?.markers)
       ? record.compare.markers.map(marker => ({
         id: marker.id || uid(),
         frame: Math.max(0, Number(marker.frame) || 0),
-        type: ['fix', 'check', 'ok'].includes(marker.type) ? marker.type : 'check'
+        type: ['fix', 'check', 'ok'].includes(marker.type) ? marker.type : 'check',
+        note: typeof marker.note === 'string' ? marker.note : ''
       }))
       : [];
     compareCurrentTime = Math.max(0, Number(record.compare?.currentTime) || 0);
+    compareSyncRefTime = Math.max(0, Number(record.compare?.syncRefTime) || 0);
+    compareSyncOwnTime = Math.max(0, Number(record.compare?.syncOwnTime) || 0);
+    compareA = Number.isFinite(record.compare?.A) ? Math.max(0, record.compare.A) : null;
+    compareB = Number.isFinite(record.compare?.B) ? Math.max(0, record.compare.B) : null;
+    compareLoopOn = Boolean(record.compare?.loopOn);
+    compareAdjustTarget = 'ref';
+    compareTransforms = {
+      ref: normalizeCompareTransform(record.compare?.transforms?.ref),
+      own: normalizeCompareTransform(record.compare?.transforms?.own)
+    };
     zoomScale = clamp(Number(record.view?.zoomScale) || 1, 1, 4);
     panX = Number(record.view?.panX) || 0;
     panY = Number(record.view?.panY) || 0;
@@ -544,6 +587,16 @@
     compareOpacity = 0.5;
     compareMarkers = [];
     compareCurrentTime = 0;
+    compareSyncRefTime = 0;
+    compareSyncOwnTime = 0;
+    compareA = null;
+    compareB = null;
+    compareLoopOn = false;
+    compareAdjustTarget = 'ref';
+    compareTransforms = {
+      ref: { scale: 1, x: 0, y: 0, flip: false },
+      own: { scale: 1, x: 0, y: 0, flip: false }
+    };
     pendingResumeTime = 0;
     fpsInput.value = '30';
     speedInput.value = '1';
@@ -1220,11 +1273,32 @@
     requestAnimationFrame(animationLoop);
   }
 
-  function compareDuration() {
-    const durations = [compareRefVideo.duration, compareOwnVideo.duration]
-      .filter(value => Number.isFinite(value) && value > 0);
-    if (!durations.length) return 0;
-    return durations.length === 2 ? Math.min(...durations) : durations[0];
+  function compareBounds() {
+    const hasRef = Boolean(compareRefVideo.src && Number.isFinite(compareRefVideo.duration));
+    const hasOwn = Boolean(compareOwnVideo.src && Number.isFinite(compareOwnVideo.duration));
+    if (hasRef && hasOwn) {
+      const min = Math.max(0, compareSyncRefTime - compareSyncOwnTime);
+      const max = Math.min(
+        compareRefVideo.duration,
+        compareSyncRefTime + compareOwnVideo.duration - compareSyncOwnTime
+      );
+      if (max > min) return { min, max };
+    }
+    if (hasRef) return { min: 0, max: compareRefVideo.duration };
+    if (hasOwn) return { min: 0, max: compareOwnVideo.duration };
+    return { min: 0, max: 0 };
+  }
+
+  function mappedCompareTimes(timelineTime) {
+    const hasRef = Boolean(compareRefVideo.src && compareRefVideo.readyState >= 1);
+    const hasOwn = Boolean(compareOwnVideo.src && compareOwnVideo.readyState >= 1);
+    if (hasRef && hasOwn) {
+      return {
+        ref: timelineTime,
+        own: timelineTime - compareSyncRefTime + compareSyncOwnTime
+      };
+    }
+    return { ref: timelineTime, own: timelineTime };
   }
 
   function compareMasterVideo() {
@@ -1234,23 +1308,30 @@
   }
 
   function setCompareTime(time, autosave = true) {
-    const duration = compareDuration();
-    compareCurrentTime = clamp(Number(time) || 0, 0, Math.max(0, duration ? duration - 0.001 : Number(time) || 0));
-    [compareRefVideo, compareOwnVideo].forEach(item => {
-      if (!item.src || item.readyState < 1) return;
-      item.currentTime = clamp(compareCurrentTime, 0, Math.max(0, item.duration - 0.001));
-    });
+    const bounds = compareBounds();
+    const max = bounds.max ? Math.max(bounds.min, bounds.max - 0.001) : Math.max(0, Number(time) || 0);
+    compareCurrentTime = clamp(Number(time) || 0, bounds.min, max);
+    const mapped = mappedCompareTimes(compareCurrentTime);
+    if (compareRefVideo.src && compareRefVideo.readyState >= 1) {
+      compareRefVideo.currentTime = clamp(mapped.ref, 0, Math.max(0, compareRefVideo.duration - 0.001));
+    }
+    if (compareOwnVideo.src && compareOwnVideo.readyState >= 1) {
+      compareOwnVideo.currentTime = clamp(mapped.own, 0, Math.max(0, compareOwnVideo.duration - 0.001));
+    }
     updateCompareHud();
     if (autosave) queueAutosave(900);
   }
 
   function updateCompareHud() {
-    const currentFrame = Math.max(0, Math.round(compareCurrentTime * fps()));
-    $('compareFrameHud').textContent = `F ${currentFrame}`;
+    const mapped = mappedCompareTimes(compareCurrentTime);
+    const refFrame = Math.max(0, Math.round(mapped.ref * fps()));
+    const ownFrame = Math.max(0, Math.round(mapped.own * fps()));
+    $('compareFrameHud').textContent = `参考 ${refFrame}F / 自作 ${ownFrame}F`;
     $('compareTimeHud').textContent = fmtTime(compareCurrentTime);
-    const duration = compareDuration();
-    $('compareScrub').value = duration
-      ? String(Math.round((compareCurrentTime / duration) * 1000))
+    const bounds = compareBounds();
+    const duration = bounds.max - bounds.min;
+    $('compareScrub').value = duration > 0
+      ? String(Math.round(((compareCurrentTime - bounds.min) / duration) * 1000))
       : '0';
   }
 
@@ -1273,8 +1354,8 @@
       renderMarkers();
       return;
     }
-    const duration = compareDuration();
-    if (duration && compareCurrentTime >= duration - 0.02) setCompareTime(0, false);
+    const bounds = compareBounds();
+    if (bounds.max && compareCurrentTime >= bounds.max - 0.02) setCompareTime(bounds.min, false);
     comparePlaying = true;
     $('comparePlay').textContent = '❚❚';
     const promises = [compareRefVideo, compareOwnVideo]
@@ -1295,16 +1376,17 @@
   function renderMarkers() {
     const track = $('markerTrack');
     track.querySelectorAll('.marker-dot').forEach(element => element.remove());
-    const duration = compareDuration();
-    const maxFrame = duration
-      ? Math.max(1, Math.round(duration * fps()))
+    const bounds = compareBounds();
+    const minFrame = Math.round(bounds.min * fps());
+    const maxFrame = bounds.max
+      ? Math.max(minFrame + 1, Math.round(bounds.max * fps()))
       : Math.max(1, ...compareMarkers.map(marker => marker.frame));
     [...compareMarkers]
       .sort((a, b) => a.frame - b.frame)
       .forEach(marker => {
         const dot = document.createElement('button');
         dot.className = `marker-dot ${marker.type}`;
-        const percent = clamp((marker.frame / maxFrame) * 100, 1.5, 98.5);
+        const percent = clamp(((marker.frame - minFrame) / (maxFrame - minFrame)) * 100, 1.5, 98.5);
         dot.style.left = `${percent}%`;
         dot.dataset.id = marker.id;
         dot.title = `${marker.frame}F ${markerLabel(marker.type)}`;
@@ -1333,12 +1415,21 @@
         frameButton.dataset.action = 'seek';
         frameButton.textContent = `${marker.frame}F`;
         const label = document.createElement('div');
-        label.textContent = markerLabel(marker.type);
+        label.textContent = marker.note
+          ? `${markerLabel(marker.type)}：${marker.note}`
+          : markerLabel(marker.type);
+        const actions = document.createElement('div');
+        actions.className = 'marker-actions';
+        const edit = document.createElement('button');
+        edit.className = 'layer-mini';
+        edit.dataset.action = 'edit';
+        edit.textContent = '✎';
         const remove = document.createElement('button');
         remove.className = 'icon-btn';
         remove.dataset.action = 'delete';
         remove.textContent = '×';
-        item.append(kind, frameButton, label, remove);
+        actions.append(edit, remove);
+        item.append(kind, frameButton, label, actions);
         list.append(item);
       });
   }
@@ -1346,19 +1437,59 @@
   function addCompareMarker(type) {
     const targetFrame = Math.max(0, Math.round(compareCurrentTime * fps()));
     const existing = compareMarkers.find(marker => marker.frame === targetFrame);
-    if (existing) existing.type = type;
-    else compareMarkers.push({ id: uid(), frame: targetFrame, type });
+    const note = prompt('マーカーメモ（空欄でもOK）', existing?.note || '');
+    if (note === null) return;
+    if (existing) {
+      existing.type = type;
+      existing.note = note.trim().slice(0, 160);
+    } else {
+      compareMarkers.push({
+        id: uid(),
+        frame: targetFrame,
+        type,
+        note: note.trim().slice(0, 160)
+      });
+    }
     renderMarkers();
     queueAutosave();
   }
 
+  function applyCompareTransforms() {
+    const apply = (element, transform) => {
+      const flip = transform.flip ? -1 : 1;
+      element.style.transform = `translate3d(${transform.x}%, ${transform.y}%, 0) scale(${transform.scale * flip}, ${transform.scale})`;
+    };
+    apply(compareRefVideo, compareTransforms.ref);
+    apply(compareOwnVideo, compareTransforms.own);
+  }
+
+  function updateCompareAdjustControls() {
+    const transform = compareTransforms[compareAdjustTarget];
+    $('adjustRef').classList.toggle('active', compareAdjustTarget === 'ref');
+    $('adjustOwn').classList.toggle('active', compareAdjustTarget === 'own');
+    $('compareScale').value = String(Math.round(transform.scale * 100));
+    $('compareScaleValue').textContent = String(Math.round(transform.scale * 100));
+    $('flipCompare').classList.toggle('primary', transform.flip);
+    $('flipCompare').textContent = transform.flip ? '左右反転 ON' : '左右反転';
+    applyCompareTransforms();
+  }
+
   function renderCompareUi() {
     const overlay = compareMode === 'overlay';
+    const difference = compareMode === 'difference';
     $('compareVideos').classList.toggle('overlay', overlay);
-    $('compareMode').textContent = overlay ? '左右に並べる' : '半透明で重ねる';
+    $('compareVideos').classList.toggle('difference', difference);
+    $('compareMode').value = compareMode;
     $('compareVideos').style.setProperty('--compare-opacity', String(compareOpacity));
     $('compareOpacity').value = String(Math.round(compareOpacity * 100));
     $('compareOpacityValue').textContent = String(Math.round(compareOpacity * 100));
+    $('syncRefFrame').value = String(Math.round(compareSyncRefTime * fps()));
+    $('syncOwnFrame').value = String(Math.round(compareSyncOwnTime * fps()));
+    $('compareSetA').textContent = compareA === null ? '比較A点' : `A ${Math.round(compareA * fps())}F`;
+    $('compareSetB').textContent = compareB === null ? '比較B点' : `B ${Math.round(compareB * fps())}F`;
+    $('compareLoop').textContent = `ABループ ${compareLoopOn ? 'ON' : 'OFF'}`;
+    $('compareLoop').classList.toggle('primary', compareLoopOn);
+    updateCompareAdjustControls();
     updateCompareHud();
     renderMarkers();
   }
@@ -1367,17 +1498,169 @@
     if (comparePlaying) {
       const master = compareMasterVideo();
       if (master) {
-        compareCurrentTime = master.currentTime || 0;
-        const follower = master === compareRefVideo ? compareOwnVideo : compareRefVideo;
-        if (follower.src && follower.readyState >= 1 && Math.abs(follower.currentTime - compareCurrentTime) > 0.055) {
-          follower.currentTime = clamp(compareCurrentTime, 0, Math.max(0, follower.duration - 0.001));
+        compareCurrentTime = master === compareOwnVideo && !compareRefVideo.src
+          ? master.currentTime || 0
+          : master.currentTime || 0;
+        if (compareLoopOn && compareA !== null && compareB !== null
+          && compareB > compareA && compareCurrentTime >= compareB) {
+          setCompareTime(compareA, false);
+          requestAnimationFrame(comparisonLoop);
+          return;
         }
-        const duration = compareDuration();
-        if ((duration && compareCurrentTime >= duration - 0.015) || master.ended) pauseComparison();
+        const follower = master === compareRefVideo ? compareOwnVideo : compareRefVideo;
+        const mapped = mappedCompareTimes(compareCurrentTime);
+        const followerTarget = follower === compareOwnVideo ? mapped.own : mapped.ref;
+        if (follower.src && follower.readyState >= 1 && Math.abs(follower.currentTime - followerTarget) > 0.055) {
+          follower.currentTime = clamp(followerTarget, 0, Math.max(0, follower.duration - 0.001));
+        }
+        const bounds = compareBounds();
+        if ((bounds.max && compareCurrentTime >= bounds.max - 0.015) || master.ended) pauseComparison();
         updateCompareHud();
       }
     }
     requestAnimationFrame(comparisonLoop);
+  }
+
+  function applyCompareSyncPoints() {
+    const refFrame = Math.max(0, Number($('syncRefFrame').value) || 0);
+    const ownFrame = Math.max(0, Number($('syncOwnFrame').value) || 0);
+    compareSyncRefTime = refFrame / fps();
+    compareSyncOwnTime = ownFrame / fps();
+    if (Number.isFinite(compareRefVideo.duration)) {
+      compareSyncRefTime = clamp(compareSyncRefTime, 0, Math.max(0, compareRefVideo.duration - 0.001));
+    }
+    if (Number.isFinite(compareOwnVideo.duration)) {
+      compareSyncOwnTime = clamp(compareSyncOwnTime, 0, Math.max(0, compareOwnVideo.duration - 0.001));
+    }
+    pauseComparison(false);
+    setCompareTime(compareSyncRefTime, false);
+    renderCompareUi();
+    queueAutosave();
+  }
+
+  function comparePointerPairMetrics() {
+    const pair = [...comparePointers.values()].slice(0, 2);
+    if (pair.length < 2) return null;
+    return {
+      distance: Math.max(1, Math.hypot(pair[1].x - pair[0].x, pair[1].y - pair[0].y)),
+      centerX: (pair[0].x + pair[1].x) / 2,
+      centerY: (pair[0].y + pair[1].y) / 2
+    };
+  }
+
+  function beginCompareTransformGesture() {
+    const rect = $('compareVideos').getBoundingClientRect();
+    const transform = compareTransforms[compareAdjustTarget];
+    if (comparePointers.size >= 2) {
+      const metrics = comparePointerPairMetrics();
+      compareGesture = {
+        type: 'pinch',
+        ...metrics,
+        scale: transform.scale,
+        x: transform.x,
+        y: transform.y,
+        width: rect.width,
+        height: rect.height
+      };
+    } else {
+      const point = [...comparePointers.values()][0];
+      compareGesture = {
+        type: 'drag',
+        startX: point.x,
+        startY: point.y,
+        x: transform.x,
+        y: transform.y,
+        width: rect.width,
+        height: rect.height
+      };
+    }
+  }
+
+  function updateCompareTransformGesture() {
+    if (!compareGesture) return;
+    const transform = compareTransforms[compareAdjustTarget];
+    if (comparePointers.size >= 2 && compareGesture.type === 'pinch') {
+      const metrics = comparePointerPairMetrics();
+      transform.scale = clamp(compareGesture.scale * (metrics.distance / compareGesture.distance), 0.5, 3);
+      transform.x = clamp(
+        compareGesture.x + ((metrics.centerX - compareGesture.centerX) / compareGesture.width) * 100,
+        -100,
+        100
+      );
+      transform.y = clamp(
+        compareGesture.y + ((metrics.centerY - compareGesture.centerY) / compareGesture.height) * 100,
+        -100,
+        100
+      );
+    } else if (comparePointers.size === 1 && compareGesture.type === 'drag') {
+      const point = [...comparePointers.values()][0];
+      transform.x = clamp(compareGesture.x + ((point.x - compareGesture.startX) / compareGesture.width) * 100, -100, 100);
+      transform.y = clamp(compareGesture.y + ((point.y - compareGesture.startY) / compareGesture.height) * 100, -100, 100);
+    }
+    updateCompareAdjustControls();
+  }
+
+  function drawVideoInBox(context, source, box, transform, fillBackground = true) {
+    context.save();
+    context.beginPath();
+    context.rect(box.x, box.y, box.width, box.height);
+    context.clip();
+    if (fillBackground) {
+      context.fillStyle = '#000';
+      context.fillRect(box.x, box.y, box.width, box.height);
+    }
+    if (source.readyState >= 2 && source.videoWidth && source.videoHeight) {
+      const fit = Math.min(box.width / source.videoWidth, box.height / source.videoHeight);
+      const width = source.videoWidth * fit;
+      const height = source.videoHeight * fit;
+      context.translate(
+        box.x + box.width / 2 + (transform.x / 100) * box.width,
+        box.y + box.height / 2 + (transform.y / 100) * box.height
+      );
+      context.scale(transform.scale * (transform.flip ? -1 : 1), transform.scale);
+      context.drawImage(source, -width / 2, -height / 2, width, height);
+    }
+    context.restore();
+  }
+
+  async function saveComparisonImage() {
+    if (!compareRefVideo.videoWidth && !compareOwnVideo.videoWidth) {
+      $('markerList').textContent = '動画を先に選んでください';
+      return;
+    }
+    const side = compareMode === 'side';
+    const output = document.createElement('canvas');
+    output.width = side ? 1920 : 1280;
+    output.height = side ? 540 : 720;
+    const context = output.getContext('2d');
+    context.fillStyle = '#000';
+    context.fillRect(0, 0, output.width, output.height);
+    if (side) {
+      drawVideoInBox(context, compareRefVideo, { x: 0, y: 0, width: 960, height: 540 }, compareTransforms.ref);
+      drawVideoInBox(context, compareOwnVideo, { x: 960, y: 0, width: 960, height: 540 }, compareTransforms.own);
+    } else {
+      const box = { x: 0, y: 0, width: output.width, height: output.height };
+      drawVideoInBox(context, compareRefVideo, box, compareTransforms.ref);
+      context.save();
+      if (compareMode === 'difference') context.globalCompositeOperation = 'difference';
+      else context.globalAlpha = compareOpacity;
+      drawVideoInBox(context, compareOwnVideo, box, compareTransforms.own, false);
+      context.restore();
+    }
+    const mapped = mappedCompareTimes(compareCurrentTime);
+    context.fillStyle = '#000a';
+    context.fillRect(0, output.height - 54, output.width, 54);
+    context.fillStyle = '#fff';
+    context.font = '700 24px sans-serif';
+    context.textBaseline = 'middle';
+    context.fillText(
+      `参考 ${Math.round(mapped.ref * fps())}F / 自作 ${Math.round(mapped.own * fps())}F`,
+      22,
+      output.height - 27
+    );
+    output.toBlob(blob => {
+      if (blob) downloadBlob(blob, `${safeFilename(projectName)}_compare_${Math.round(compareCurrentTime * fps())}F.png`);
+    }, 'image/png');
   }
 
   function renderMemos() {
@@ -1712,10 +1995,11 @@
   $('compareNext5').addEventListener('click', () => stepCompareFrames(5));
   $('compareScrub').addEventListener('input', event => {
     pauseComparison(false);
-    setCompareTime((Number(event.target.value) / 1000) * compareDuration());
+    const bounds = compareBounds();
+    setCompareTime(bounds.min + (Number(event.target.value) / 1000) * (bounds.max - bounds.min));
   });
-  $('compareMode').addEventListener('click', () => {
-    compareMode = compareMode === 'overlay' ? 'side' : 'overlay';
+  $('compareMode').addEventListener('change', event => {
+    compareMode = event.target.value;
     renderCompareUi();
     queueAutosave();
   });
@@ -1724,6 +2008,87 @@
     renderCompareUi();
     queueAutosave();
   });
+  $('applySync').addEventListener('click', applyCompareSyncPoints);
+  $('resetSync').addEventListener('click', () => {
+    compareSyncRefTime = 0;
+    compareSyncOwnTime = 0;
+    setCompareTime(0, false);
+    renderCompareUi();
+    queueAutosave();
+  });
+  $('compareSetA').addEventListener('click', () => {
+    compareA = compareCurrentTime;
+    renderCompareUi();
+    queueAutosave();
+  });
+  $('compareSetB').addEventListener('click', () => {
+    compareB = compareCurrentTime;
+    renderCompareUi();
+    queueAutosave();
+  });
+  $('compareLoop').addEventListener('click', () => {
+    if (!compareLoopOn && (compareA === null || compareB === null || compareB <= compareA)) {
+      $('markerList').textContent = '比較A点、B点の順に設定してください';
+      return;
+    }
+    compareLoopOn = !compareLoopOn;
+    renderCompareUi();
+    queueAutosave();
+  });
+  $('adjustRef').addEventListener('click', () => {
+    compareAdjustTarget = 'ref';
+    updateCompareAdjustControls();
+  });
+  $('adjustOwn').addEventListener('click', () => {
+    compareAdjustTarget = 'own';
+    updateCompareAdjustControls();
+  });
+  $('compareScale').addEventListener('input', event => {
+    compareTransforms[compareAdjustTarget].scale = clamp(Number(event.target.value) / 100, 0.5, 3);
+    updateCompareAdjustControls();
+    queueAutosave();
+  });
+  $('flipCompare').addEventListener('click', () => {
+    compareTransforms[compareAdjustTarget].flip = !compareTransforms[compareAdjustTarget].flip;
+    updateCompareAdjustControls();
+    queueAutosave();
+  });
+  $('resetCompareTransform').addEventListener('click', () => {
+    compareTransforms[compareAdjustTarget] = { scale: 1, x: 0, y: 0, flip: false };
+    updateCompareAdjustControls();
+    queueAutosave();
+  });
+  $('saveCompareImage').addEventListener('click', saveComparisonImage);
+
+  const compareSurface = $('compareVideos');
+  compareSurface.addEventListener('pointerdown', event => {
+    event.preventDefault();
+    pauseComparison(false);
+    try {
+      compareSurface.setPointerCapture(event.pointerId);
+    } catch (_) {}
+    comparePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    beginCompareTransformGesture();
+  });
+  compareSurface.addEventListener('pointermove', event => {
+    if (!comparePointers.has(event.pointerId)) return;
+    event.preventDefault();
+    comparePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    updateCompareTransformGesture();
+  });
+  const finishComparePointer = event => {
+    if (!comparePointers.has(event.pointerId)) return;
+    event.preventDefault();
+    comparePointers.delete(event.pointerId);
+    if (comparePointers.size) beginCompareTransformGesture();
+    else {
+      compareGesture = null;
+      queueAutosave();
+    }
+  };
+  compareSurface.addEventListener('pointerup', finishComparePointer);
+  compareSurface.addEventListener('pointercancel', finishComparePointer);
+
   $('markerFix').addEventListener('click', () => addCompareMarker('fix'));
   $('markerCheck').addEventListener('click', () => addCompareMarker('check'));
   $('markerOk').addEventListener('click', () => addCompareMarker('ok'));
@@ -1740,6 +2105,13 @@
     const marker = compareMarkers.find(entry => entry.id === item.dataset.id);
     if (!marker) return;
     if (action === 'seek') setCompareTime(marker.frame / fps());
+    else if (action === 'edit') {
+      const note = prompt('マーカーメモ', marker.note || '');
+      if (note === null) return;
+      marker.note = note.trim().slice(0, 160);
+      renderMarkers();
+      queueAutosave();
+    }
     else if (action === 'delete') {
       compareMarkers = compareMarkers.filter(entry => entry.id !== marker.id);
       renderMarkers();
@@ -1763,6 +2135,7 @@
     fpsInput.value = String(fps());
     currentLoadedFrame = -1;
     updateHud(true);
+    renderCompareUi();
     queueAutosave();
   });
   speedInput.addEventListener('change', () => {
@@ -2052,7 +2425,7 @@
     await saveProjectNow();
     const payload = {
       format: 'Animation Coach',
-      version: '0.5',
+      version: '0.6',
       exportedAt: new Date().toISOString(),
       project: serializeProject()
     };
