@@ -1,4 +1,4 @@
-const CACHE="animation-coach-v0.6";
+const CACHE="animation-coach-v0.7";
 const ASSETS=["./","./index.html","./app.js","./manifest.webmanifest","./icon-192.png","./icon-512.png"];
 
 self.addEventListener("install",event=>{

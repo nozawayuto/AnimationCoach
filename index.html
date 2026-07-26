@@ -34,7 +34,7 @@
     .topbar { display:flex; gap:10px; align-items:center; margin-bottom:10px; }
     .title { font-weight:800; letter-spacing:.02em; flex:1; }
     .badge { color:var(--muted); font-size:12px; }
-    .tabs { display:grid; grid-template-columns:repeat(4,1fr); gap:7px; margin-bottom:10px; }
+    .tabs { display:grid; grid-template-columns:repeat(5,1fr); gap:7px; margin-bottom:10px; }
     .tab {
       min-height:44px; border-radius:12px; border:1px solid var(--border);
       background:var(--panel); color:var(--text); font-weight:750;
@@ -276,6 +276,81 @@
     .marker-kind.check { background:#ffd60a; }
     .marker-kind.ok { background:#30d158; }
     .marker-actions { display:flex; gap:4px; }
+    .analysis-shell { display:grid; gap:9px; }
+    .analysis-stage {
+      position:relative; width:100%; aspect-ratio:16/9; overflow:hidden;
+      border:1px solid var(--border); border-radius:16px; background:#000;
+      touch-action:none;
+    }
+    .analysis-stage video,.analysis-stage canvas {
+      position:absolute; inset:0; width:100%; height:100%;
+      object-fit:contain; transform:none;
+    }
+    #onionCanvas { z-index:1; pointer-events:none; }
+    #guideCanvas { z-index:2; pointer-events:none; }
+    #analysisOverlayCanvas { z-index:3; }
+    .analysis-hud {
+      position:absolute; z-index:4; top:8px; left:8px; right:8px;
+      display:flex; justify-content:space-between; pointer-events:none;
+    }
+    .analysis-hud span {
+      padding:5px 8px; border-radius:8px; background:#000a;
+      font-variant-numeric:tabular-nums;
+    }
+    .analysis-empty {
+      position:absolute; z-index:4; inset:0; display:grid; place-items:center;
+      color:var(--muted); pointer-events:none;
+    }
+    .frame-loader {
+      position:fixed; left:-10px; bottom:-10px; width:2px; height:2px;
+      opacity:.001; pointer-events:none;
+    }
+    .analysis-settings {
+      display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px;
+    }
+    .analysis-mode.active { outline:2px solid var(--accent); background:var(--panel2); }
+    .tracker-list { display:flex; gap:6px; flex-wrap:wrap; }
+    .tracker-chip {
+      min-height:38px; border:1px solid var(--border); border-radius:10px;
+      padding:5px 10px; background:var(--panel); color:var(--text); font-weight:750;
+    }
+    .tracker-chip.active { outline:2px solid var(--accent); }
+    .tracker-dot {
+      display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px;
+    }
+    .guide-colors { display:flex; gap:7px; align-items:center; }
+    .guide-color {
+      width:34px; height:34px; border-radius:50%; border:2px solid var(--border);
+    }
+    .guide-color.active { outline:3px solid #fff; }
+    .phase-bar {
+      position:relative; display:flex; min-height:34px; overflow:hidden;
+      border:1px solid var(--border); border-radius:10px; background:var(--panel);
+    }
+    .phase-segment {
+      min-width:0; display:grid; place-items:center; font-size:11px;
+      color:#fff; overflow:hidden; white-space:nowrap;
+    }
+    .phase-segment.anticipation { background:#0a84ff; }
+    .phase-segment.action { background:#ff453a; }
+    .phase-segment.follow { background:#bf5af2; }
+    .phase-segment.other { background:#3a4151; }
+    .phase-cursor {
+      position:absolute; top:0; bottom:0; width:3px; background:#fff;
+      transform:translateX(-50%); box-shadow:0 0 5px #000;
+    }
+    .pose-grid {
+      display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:8px;
+    }
+    .pose-card {
+      overflow:hidden; border:1px solid var(--border); border-radius:12px;
+      background:var(--panel);
+    }
+    .pose-thumb {
+      width:100%; aspect-ratio:16/9; display:block; object-fit:cover; background:#000;
+    }
+    .pose-info { display:grid; grid-template-columns:auto 1fr auto; gap:6px; align-items:center; padding:7px; }
+    .pose-note { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
     input[type=file] { display:none; }
     @media (max-width:680px) {
       .toolbar { grid-template-columns:repeat(3,1fr); }
@@ -285,6 +360,7 @@
       .text-controls .range-wrap { grid-column:1/-1; }
       .compare-tools { grid-template-columns:repeat(2,1fr); }
       .sync-grid,.compare-adjust { grid-template-columns:repeat(2,1fr); }
+      .analysis-settings { grid-template-columns:repeat(2,1fr); }
     }
     @media (orientation:landscape) and (max-height:600px) {
       html,body { height:100%; }
@@ -367,6 +443,9 @@
       .compare-pane,.compare-video-wrap { height:100%; }
       .compare-video-wrap { aspect-ratio:auto; }
       .compare-transport .btn,.compare-tools .btn { min-height:36px; font-size:11px; }
+      #analysisPanel.active { overflow-y:auto; }
+      .analysis-stage { height:min(50dvh,210px); aspect-ratio:auto; }
+      .analysis-shell .compare-transport .btn { min-height:36px; font-size:11px; }
     }
   </style>
 </head>
@@ -374,12 +453,13 @@
 <main class="app">
   <div class="topbar">
     <div class="title">Animation Coach</div>
-    <div class="badge">v0.6</div>
+    <div class="badge">v0.7</div>
   </div>
 
   <div class="tabs" role="tablist">
     <button class="tab active" data-tab="videoPanel">🎥 動画</button>
     <button class="tab" data-tab="comparePanel">⚖️ 比較</button>
+    <button class="tab" data-tab="analysisPanel">📈 分析</button>
     <button class="tab" data-tab="memoPanel">📝 メモ</button>
     <button class="tab" data-tab="exportPanel">💾 保存</button>
   </div>
@@ -582,6 +662,100 @@
         <button class="btn small" id="markerOk" style="color:#30d158;">● OK</button>
       </div>
       <div id="markerList" class="marker-list"></div>
+    </div>
+  </section>
+
+  <section class="panel" id="analysisPanel">
+    <div class="analysis-shell">
+      <div class="analysis-stage" id="analysisStage">
+        <video id="analysisVideo" playsinline muted preload="metadata"></video>
+        <canvas id="onionCanvas"></canvas>
+        <canvas id="guideCanvas"></canvas>
+        <canvas id="analysisOverlayCanvas"></canvas>
+        <div class="analysis-empty" id="analysisEmpty">動画ページで参考動画を選択</div>
+        <div class="analysis-hud">
+          <span id="analysisFrameHud">F 0</span>
+          <span id="analysisTimeHud">00:00.000</span>
+        </div>
+      </div>
+      <video id="analysisFrameLoader" class="frame-loader" playsinline muted preload="auto"></video>
+
+      <input id="analysisScrub" class="compare-scrub" type="range" min="0" max="1000" value="0" step="1">
+      <div class="compare-transport">
+        <button class="btn" id="analysisBack5">−5F</button>
+        <button class="btn" id="analysisBack1">−1F</button>
+        <button class="btn primary" id="analysisPlay">▶︎</button>
+        <button class="btn" id="analysisNext1">+1F</button>
+        <button class="btn" id="analysisNext5">+5F</button>
+      </div>
+
+      <div class="section-title">オニオンスキン</div>
+      <div class="analysis-settings">
+        <div class="field">
+          <label for="onionPrev">前フレーム数</label>
+          <select id="onionPrev"><option value="0">0</option><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option></select>
+        </div>
+        <div class="field">
+          <label for="onionNext">後フレーム数</label>
+          <select id="onionNext"><option value="0">0</option><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option></select>
+        </div>
+        <div class="field">
+          <label for="onionOpacity">透明度 <span id="onionOpacityValue">25</span>%</label>
+          <input id="onionOpacity" type="range" min="5" max="70" value="25" style="width:100%;accent-color:var(--accent);">
+        </div>
+        <button class="btn small primary" id="toggleOnion">オニオン ON</button>
+      </div>
+
+      <div class="section-title">軌跡・共通ガイド</div>
+      <div class="row">
+        <button class="btn small analysis-mode active" id="trackMode">軌跡ポイント</button>
+        <button class="btn small analysis-mode" id="guideMode">ガイド描画</button>
+      </div>
+
+      <div id="trackControls">
+        <div class="row">
+          <button class="btn small" id="addTracker">＋軌跡</button>
+          <button class="btn small" id="renameTracker">名前変更</button>
+          <button class="btn small danger" id="deleteTracker">軌跡削除</button>
+          <button class="btn small" id="deleteTrackPoint">現在Fの点を削除</button>
+        </div>
+        <div id="trackerList" class="tracker-list" style="margin-top:8px;"></div>
+        <div class="compare-hint" style="margin-top:6px;">動画上をタップすると、現在フレームへ選択中の軌跡ポイントを登録します。</div>
+      </div>
+
+      <div id="guideControls" class="hidden">
+        <div class="row">
+          <button class="btn small primary" id="guidePen">ペン</button>
+          <button class="btn small" id="guideLine">直線</button>
+          <button class="btn small" id="toggleGuide">ガイド ON</button>
+          <button class="btn small danger" id="clearGuide">全消去</button>
+        </div>
+        <div class="guide-colors" style="margin-top:8px;">
+          <button class="guide-color active" data-guide-color="#ff3b30" style="background:#ff3b30" aria-label="赤"></button>
+          <button class="guide-color" data-guide-color="#0a84ff" style="background:#0a84ff" aria-label="青"></button>
+          <button class="guide-color" data-guide-color="#30d158" style="background:#30d158" aria-label="緑"></button>
+          <button class="guide-color" data-guide-color="#ffd60a" style="background:#ffd60a" aria-label="黄"></button>
+          <button class="guide-color" data-guide-color="#ffffff" style="background:#fff" aria-label="白"></button>
+        </div>
+        <div class="compare-hint" style="margin-top:6px;">ここで描いたガイドは全フレームに表示されます。</div>
+      </div>
+
+      <div class="section-title">動作区間</div>
+      <div id="phaseBar" class="phase-bar"></div>
+      <div class="row">
+        <button class="btn small" id="phaseAnticipation">予備動作</button>
+        <button class="btn small" id="phaseAction">本動作</button>
+        <button class="btn small" id="phaseFollow">フォロースルー</button>
+        <button class="btn small" id="phaseEnd">終了</button>
+        <button class="btn small danger" id="clearPhases">クリア</button>
+      </div>
+
+      <div class="section-title">重要ポーズ</div>
+      <div class="row">
+        <button class="btn small primary" id="addKeyPose">現在フレームを追加</button>
+        <button class="btn small" id="saveAnalysisSheet">分析シート画像を保存</button>
+      </div>
+      <div id="poseGrid" class="pose-grid"></div>
     </div>
   </section>
 

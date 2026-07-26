@@ -20,6 +20,14 @@
   const empty = $('empty');
   const compareRefVideo = $('compareRefVideo');
   const compareOwnVideo = $('compareOwnVideo');
+  const analysisVideo = $('analysisVideo');
+  const analysisFrameLoader = $('analysisFrameLoader');
+  const onionCanvas = $('onionCanvas');
+  const guideCanvas = $('guideCanvas');
+  const analysisOverlayCanvas = $('analysisOverlayCanvas');
+  const onionCtx = onionCanvas.getContext('2d');
+  const guideCtx = guideCanvas.getContext('2d');
+  const analysisOverlayCtx = analysisOverlayCanvas.getContext('2d');
 
   const DB_NAME = 'animation-coach-v04';
   const DB_VERSION = 2;
@@ -68,6 +76,33 @@
   const comparePointers = new Map();
   let compareGesture = null;
 
+  let analysisCurrentTime = 0;
+  let analysisPlaying = false;
+  let onionEnabled = true;
+  let onionPrev = 1;
+  let onionNext = 1;
+  let onionOpacity = 0.25;
+  let analysisMode = 'track';
+  let trackers = [];
+  let activeTrackerId = '';
+  let guideData = null;
+  let guideVisible = true;
+  let guideTool = 'pen';
+  let guideColor = '#ff3b30';
+  let guideSize = 5;
+  let guideDrawing = false;
+  let guidePointerId = null;
+  let analysisTrackPointerId = null;
+  let guideStartPoint = null;
+  let guideLastPoint = null;
+  let guideSnapshot = null;
+  let keyPoses = [];
+  let analysisPhases = { anticipation: null, action: null, follow: null, end: null };
+  let analysisRenderToken = 0;
+  let onionCaptureChain = Promise.resolve();
+  const onionFrameCache = new Map();
+  const onionFramePromises = new Map();
+
   let layers = [];
   let activeLayerId = '';
   let layersGloballyVisible = true;
@@ -101,6 +136,24 @@
     return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   };
 
+  const trackerPalette = ['#ff453a', '#0a84ff', '#30d158', '#ffd60a', '#bf5af2', '#64d2ff', '#ff9f0a'];
+  const makeTracker = (name = `軌跡 ${trackers.length + 1}`) => ({
+    id: uid(),
+    name,
+    color: trackerPalette[trackers.length % trackerPalette.length],
+    points: {}
+  });
+
+  function ensureTrackers() {
+    if (!trackers.length) trackers = [makeTracker('軌跡 1')];
+    if (!trackers.some(tracker => tracker.id === activeTrackerId)) activeTrackerId = trackers[0].id;
+  }
+
+  const activeTracker = () => {
+    ensureTrackers();
+    return trackers.find(tracker => tracker.id === activeTrackerId) || trackers[0];
+  };
+
   const makeLayer = (name = `レイヤー ${layers.length + 1}`) => ({
     id: uid(),
     name,
@@ -114,6 +167,7 @@
   }
 
   ensureLayers();
+  ensureTrackers();
 
   const activeLayer = () => {
     ensureLayers();
@@ -218,7 +272,7 @@
     ensureLayers();
     return {
       id: projectId,
-      version: '0.6',
+      version: '0.7',
       name: projectName,
       createdAt: projectCreatedAt,
       updatedAt: Date.now(),
@@ -256,6 +310,28 @@
           ref: { ...compareTransforms.ref },
           own: { ...compareTransforms.own }
         }
+      },
+      analysis: {
+        currentTime: analysisCurrentTime,
+        onionEnabled,
+        onionPrev,
+        onionNext,
+        onionOpacity,
+        mode: analysisMode,
+        trackers: trackers.map(tracker => ({
+          id: tracker.id,
+          name: tracker.name,
+          color: tracker.color,
+          points: { ...tracker.points }
+        })),
+        activeTrackerId,
+        guideData,
+        guideVisible,
+        guideTool,
+        guideColor,
+        guideSize,
+        keyPoses: keyPoses.map(pose => ({ ...pose })),
+        phases: { ...analysisPhases }
       },
       view: { zoomScale, panX, panY },
       drawing: { tool, color, brushSize, textSize }
@@ -391,6 +467,46 @@
       ref: normalizeCompareTransform(record.compare?.transforms?.ref),
       own: normalizeCompareTransform(record.compare?.transforms?.own)
     };
+    analysisCurrentTime = Math.max(0, Number(record.analysis?.currentTime) || 0);
+    onionEnabled = record.analysis?.onionEnabled !== false;
+    onionPrev = Number.isFinite(Number(record.analysis?.onionPrev))
+      ? clamp(Number(record.analysis.onionPrev), 0, 3)
+      : 1;
+    onionNext = Number.isFinite(Number(record.analysis?.onionNext))
+      ? clamp(Number(record.analysis.onionNext), 0, 3)
+      : 1;
+    onionOpacity = clamp(Number(record.analysis?.onionOpacity) || 0.25, 0.05, 0.7);
+    analysisMode = record.analysis?.mode === 'guide' ? 'guide' : 'track';
+    trackers = Array.isArray(record.analysis?.trackers) && record.analysis.trackers.length
+      ? record.analysis.trackers.map((tracker, index) => ({
+        id: tracker.id || uid(),
+        name: String(tracker.name || `軌跡 ${index + 1}`).slice(0, 40),
+        color: tracker.color || trackerPalette[index % trackerPalette.length],
+        points: tracker.points && typeof tracker.points === 'object' ? { ...tracker.points } : {}
+      }))
+      : [makeTracker('軌跡 1')];
+    activeTrackerId = record.analysis?.activeTrackerId || trackers[0].id;
+    guideData = typeof record.analysis?.guideData === 'string' ? record.analysis.guideData : null;
+    guideVisible = record.analysis?.guideVisible !== false;
+    guideTool = record.analysis?.guideTool === 'line' ? 'line' : 'pen';
+    guideColor = record.analysis?.guideColor || '#ff3b30';
+    guideSize = clamp(Number(record.analysis?.guideSize) || 5, 2, 30);
+    keyPoses = Array.isArray(record.analysis?.keyPoses)
+      ? record.analysis.keyPoses
+        .filter(pose => pose && typeof pose.thumbnail === 'string')
+        .map(pose => ({
+          id: pose.id || uid(),
+          frame: Math.max(0, Number(pose.frame) || 0),
+          note: typeof pose.note === 'string' ? pose.note : '',
+          thumbnail: pose.thumbnail
+        }))
+      : [];
+    analysisPhases = {
+      anticipation: Number.isFinite(record.analysis?.phases?.anticipation) ? Math.max(0, record.analysis.phases.anticipation) : null,
+      action: Number.isFinite(record.analysis?.phases?.action) ? Math.max(0, record.analysis.phases.action) : null,
+      follow: Number.isFinite(record.analysis?.phases?.follow) ? Math.max(0, record.analysis.phases.follow) : null,
+      end: Number.isFinite(record.analysis?.phases?.end) ? Math.max(0, record.analysis.phases.end) : null
+    };
     zoomScale = clamp(Number(record.view?.zoomScale) || 1, 1, 4);
     panX = Number(record.view?.panX) || 0;
     panY = Number(record.view?.panY) || 0;
@@ -404,6 +520,7 @@
     historyIndex = {};
     currentLoadedFrame = -1;
     ensureLayers();
+    ensureTrackers();
 
     $('projectNameInput').value = projectName;
     $('brushSize').value = String(brushSize);
@@ -423,6 +540,7 @@
     renderMemos();
     renderLayerList();
     renderCompareUi();
+    renderAnalysisUi();
     applyViewTransform();
     applyLayerVisibility();
     updateHud(true);
@@ -446,13 +564,23 @@
   function clearVideoSource() {
     video.pause();
     compareRefVideo.pause();
+    analysisVideo.pause();
+    analysisPlaying = false;
+    analysisCurrentTime = 0;
+    onionFrameCache.clear();
+    analysisRenderToken += 1;
     revokeVideoUrl();
     video.removeAttribute('src');
     compareRefVideo.removeAttribute('src');
+    analysisVideo.removeAttribute('src');
+    analysisFrameLoader.removeAttribute('src');
     video.load();
     compareRefVideo.load();
+    analysisVideo.load();
+    analysisFrameLoader.load();
     empty.classList.remove('hidden');
     $('compareRefEmpty').classList.remove('hidden');
+    $('analysisEmpty').classList.remove('hidden');
     scrub.value = '0';
     currentLoadedFrame = -1;
     renderCurrentFrame(0);
@@ -461,13 +589,20 @@
   function loadVideoBlob(blob, name = '') {
     return new Promise((resolve, reject) => {
       video.pause();
+      analysisVideo.pause();
+      analysisPlaying = false;
+      analysisRenderToken += 1;
+      onionFrameCache.clear();
       revokeVideoUrl();
       objectUrl = URL.createObjectURL(blob);
       video.src = objectUrl;
       compareRefVideo.src = objectUrl;
+      analysisVideo.src = objectUrl;
+      analysisFrameLoader.src = objectUrl;
       videoName = name || videoName;
       empty.classList.add('hidden');
       $('compareRefEmpty').classList.add('hidden');
+      $('analysisEmpty').classList.add('hidden');
       const onLoaded = () => {
         cleanup();
         const end = Math.max(0, (video.duration || 0) - 0.001);
@@ -489,6 +624,8 @@
       video.addEventListener('error', onError);
       video.load();
       compareRefVideo.load();
+      analysisVideo.load();
+      analysisFrameLoader.load();
     });
   }
 
@@ -555,9 +692,11 @@
       clearCompareOwnSource();
     }
     setCompareTime(compareCurrentTime, false);
+    setAnalysisTime(analysisCurrentTime, false);
     renderLayerList();
     renderMemos();
     renderCurrentFrame(frame());
+    renderAnalysisUi();
   }
 
   async function createNewProject({ saveCurrent = true } = {}) {
@@ -597,6 +736,24 @@
       ref: { scale: 1, x: 0, y: 0, flip: false },
       own: { scale: 1, x: 0, y: 0, flip: false }
     };
+    analysisCurrentTime = 0;
+    analysisPlaying = false;
+    onionEnabled = true;
+    onionPrev = 1;
+    onionNext = 1;
+    onionOpacity = 0.25;
+    analysisMode = 'track';
+    trackers = [];
+    trackers = [makeTracker('軌跡 1')];
+    activeTrackerId = trackers[0].id;
+    guideData = null;
+    guideVisible = true;
+    guideTool = 'pen';
+    guideColor = '#ff3b30';
+    guideSize = 5;
+    keyPoses = [];
+    analysisPhases = { anticipation: null, action: null, follow: null, end: null };
+    onionFrameCache.clear();
     pendingResumeTime = 0;
     fpsInput.value = '30';
     speedInput.value = '1';
@@ -610,6 +767,7 @@
     renderLayerList();
     renderMemos();
     renderCompareUi();
+    renderAnalysisUi();
     applyViewTransform();
     applyLayerVisibility();
     localStorage.setItem(LAST_PROJECT_KEY, projectId);
@@ -1663,6 +1821,483 @@
     }, 'image/png');
   }
 
+  const analysisFrame = () => Math.max(0, Math.round(analysisCurrentTime * fps()));
+
+  function sizeAnalysisCanvas(canvas, context) {
+    const width = Math.max(1, canvas.clientWidth);
+    const height = Math.max(1, canvas.clientHeight);
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    canvas.width = Math.max(1, Math.round(width * dpr));
+    canvas.height = Math.max(1, Math.round(height * dpr));
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function resizeAnalysisCanvases() {
+    sizeAnalysisCanvas(onionCanvas, onionCtx);
+    sizeAnalysisCanvas(guideCanvas, guideCtx);
+    sizeAnalysisCanvas(analysisOverlayCanvas, analysisOverlayCtx);
+    renderGuideCanvas();
+    renderAnalysisOverlay();
+    renderOnionSkin();
+  }
+
+  function analysisPointFromEvent(event) {
+    const rect = analysisOverlayCanvas.getBoundingClientRect();
+    return {
+      x: (event.clientX - rect.left) * (analysisOverlayCanvas.clientWidth / rect.width),
+      y: (event.clientY - rect.top) * (analysisOverlayCanvas.clientHeight / rect.height)
+    };
+  }
+
+  function prepareGuideContext() {
+    guideCtx.lineWidth = guideSize;
+    guideCtx.lineCap = 'round';
+    guideCtx.lineJoin = 'round';
+    guideCtx.strokeStyle = guideColor;
+    guideCtx.fillStyle = guideColor;
+    guideCtx.globalCompositeOperation = 'source-over';
+  }
+
+  function drawContained(context, source, width, height) {
+    const sourceWidth = source.videoWidth || source.width;
+    const sourceHeight = source.videoHeight || source.height;
+    if (!sourceWidth || !sourceHeight) return;
+    const scale = Math.min(width / sourceWidth, height / sourceHeight);
+    const drawWidth = sourceWidth * scale;
+    const drawHeight = sourceHeight * scale;
+    context.drawImage(
+      source,
+      (width - drawWidth) / 2,
+      (height - drawHeight) / 2,
+      drawWidth,
+      drawHeight
+    );
+  }
+
+  function waitForMediaEvent(element, eventName, timeout = 1800) {
+    return new Promise(resolve => {
+      let timer;
+      const finish = () => {
+        clearTimeout(timer);
+        element.removeEventListener(eventName, finish);
+        resolve();
+      };
+      element.addEventListener(eventName, finish, { once: true });
+      timer = setTimeout(finish, timeout);
+    });
+  }
+
+  async function captureOnionFrameNow(targetFrame) {
+    if (onionFrameCache.has(targetFrame)) return onionFrameCache.get(targetFrame);
+    if (!analysisFrameLoader.src || analysisFrameLoader.readyState < 1) return null;
+    const targetTime = clamp(
+      targetFrame / fps(),
+      0,
+      Math.max(0, analysisFrameLoader.duration - 0.001)
+    );
+    if (analysisFrameLoader.readyState < 2) await waitForMediaEvent(analysisFrameLoader, 'loadeddata');
+    if (Math.abs(analysisFrameLoader.currentTime - targetTime) > 0.0005) {
+      analysisFrameLoader.currentTime = targetTime;
+      await waitForMediaEvent(analysisFrameLoader, 'seeked');
+    }
+    if (!analysisFrameLoader.videoWidth) return null;
+    const snapshot = document.createElement('canvas');
+    const scale = Math.min(1, 640 / analysisFrameLoader.videoWidth);
+    snapshot.width = Math.max(2, Math.round(analysisFrameLoader.videoWidth * scale));
+    snapshot.height = Math.max(2, Math.round(analysisFrameLoader.videoHeight * scale));
+    snapshot.getContext('2d').drawImage(analysisFrameLoader, 0, 0, snapshot.width, snapshot.height);
+    onionFrameCache.set(targetFrame, snapshot);
+    if (onionFrameCache.size > 30) {
+      const first = onionFrameCache.keys().next().value;
+      onionFrameCache.delete(first);
+    }
+    return snapshot;
+  }
+
+  function captureOnionFrame(targetFrame) {
+    if (onionFrameCache.has(targetFrame)) return Promise.resolve(onionFrameCache.get(targetFrame));
+    if (onionFramePromises.has(targetFrame)) return onionFramePromises.get(targetFrame);
+    const capture = onionCaptureChain.then(() => captureOnionFrameNow(targetFrame));
+    onionCaptureChain = capture.catch(() => null);
+    onionFramePromises.set(targetFrame, capture);
+    capture.then(
+      () => onionFramePromises.delete(targetFrame),
+      () => onionFramePromises.delete(targetFrame)
+    );
+    return capture;
+  }
+
+  async function renderOnionSkin() {
+    const token = ++analysisRenderToken;
+    clearContext(onionCtx, onionCanvas);
+    if (!onionEnabled || analysisPlaying || !analysisVideo.src || analysisVideo.readyState < 1) return;
+    const current = analysisFrame();
+    const totalFrames = Math.max(0, Math.floor((analysisVideo.duration || 0) * fps()));
+    const targets = [];
+    for (let distance = Math.max(onionPrev, onionNext); distance >= 1; distance -= 1) {
+      if (distance <= onionPrev && current - distance >= 0) targets.push({ frame: current - distance, distance, previous: true });
+      if (distance <= onionNext && current + distance <= totalFrames) targets.push({ frame: current + distance, distance, previous: false });
+    }
+    for (const target of targets) {
+      const snapshot = await captureOnionFrame(target.frame);
+      if (token !== analysisRenderToken) return;
+      if (!snapshot) continue;
+      onionCtx.save();
+      onionCtx.globalAlpha = onionOpacity / Math.max(1, target.distance * 0.8);
+      onionCtx.globalCompositeOperation = 'screen';
+      onionCtx.filter = target.previous
+        ? 'sepia(1) saturate(4) hue-rotate(145deg)'
+        : 'sepia(1) saturate(5) hue-rotate(315deg)';
+      drawContained(onionCtx, snapshot, onionCanvas.clientWidth, onionCanvas.clientHeight);
+      onionCtx.restore();
+    }
+  }
+
+  function renderGuideCanvas() {
+    clearContext(guideCtx, guideCanvas);
+    guideCanvas.style.opacity = guideVisible ? '1' : '0';
+    if (!guideData) return;
+    const image = new Image();
+    image.onload = () => {
+      clearContext(guideCtx, guideCanvas);
+      guideCtx.drawImage(image, 0, 0, guideCanvas.clientWidth, guideCanvas.clientHeight);
+    };
+    image.src = guideData;
+  }
+
+  function saveGuideCanvas() {
+    guideData = guideCanvas.toDataURL('image/png');
+    queueAutosave();
+  }
+
+  function renderAnalysisOverlay() {
+    clearContext(analysisOverlayCtx, analysisOverlayCanvas);
+    ensureTrackers();
+    const width = analysisOverlayCanvas.clientWidth;
+    const height = analysisOverlayCanvas.clientHeight;
+    const current = analysisFrame();
+    trackers.forEach(tracker => {
+      const points = Object.entries(tracker.points || {})
+        .map(([frameNumber, point]) => ({ frame: Number(frameNumber), ...point }))
+        .filter(point => Number.isFinite(point.frame) && Number.isFinite(point.x) && Number.isFinite(point.y))
+        .sort((a, b) => a.frame - b.frame);
+      if (!points.length) return;
+      analysisOverlayCtx.save();
+      analysisOverlayCtx.strokeStyle = tracker.color;
+      analysisOverlayCtx.fillStyle = tracker.color;
+      analysisOverlayCtx.lineWidth = 3;
+      analysisOverlayCtx.lineCap = 'round';
+      analysisOverlayCtx.lineJoin = 'round';
+      analysisOverlayCtx.globalAlpha = tracker.id === activeTrackerId ? 1 : 0.62;
+      analysisOverlayCtx.beginPath();
+      points.forEach((point, index) => {
+        const x = point.x * width;
+        const y = point.y * height;
+        if (index === 0) analysisOverlayCtx.moveTo(x, y);
+        else analysisOverlayCtx.lineTo(x, y);
+      });
+      analysisOverlayCtx.stroke();
+      points.forEach(point => {
+        const x = point.x * width;
+        const y = point.y * height;
+        analysisOverlayCtx.beginPath();
+        analysisOverlayCtx.arc(x, y, point.frame === current ? 7 : 4, 0, Math.PI * 2);
+        analysisOverlayCtx.fill();
+        if (point.frame === current) {
+          analysisOverlayCtx.strokeStyle = '#fff';
+          analysisOverlayCtx.lineWidth = 2;
+          analysisOverlayCtx.stroke();
+          analysisOverlayCtx.strokeStyle = tracker.color;
+          analysisOverlayCtx.lineWidth = 3;
+        }
+      });
+      const last = points[points.length - 1];
+      analysisOverlayCtx.font = '700 12px sans-serif';
+      analysisOverlayCtx.fillText(tracker.name, last.x * width + 8, last.y * height - 8);
+      analysisOverlayCtx.restore();
+    });
+  }
+
+  function renderTrackerList() {
+    ensureTrackers();
+    const list = $('trackerList');
+    list.replaceChildren();
+    trackers.forEach(tracker => {
+      const button = document.createElement('button');
+      button.className = `tracker-chip${tracker.id === activeTrackerId ? ' active' : ''}`;
+      button.dataset.id = tracker.id;
+      const dot = document.createElement('span');
+      dot.className = 'tracker-dot';
+      dot.style.background = tracker.color;
+      const name = document.createElement('span');
+      name.textContent = `${tracker.name} (${Object.keys(tracker.points || {}).length})`;
+      button.append(dot, name);
+      list.append(button);
+    });
+  }
+
+  function phaseTotalFrames() {
+    return Math.max(
+      1,
+      Math.round((analysisVideo.duration || 0) * fps()),
+      ...Object.values(analysisPhases).filter(Number.isFinite),
+      ...keyPoses.map(pose => pose.frame)
+    );
+  }
+
+  function renderPhaseBar() {
+    const bar = $('phaseBar');
+    bar.replaceChildren();
+    const total = phaseTotalFrames();
+    const anticipation = clamp(analysisPhases.anticipation ?? 0, 0, total);
+    const action = clamp(analysisPhases.action ?? anticipation, anticipation, total);
+    const follow = clamp(analysisPhases.follow ?? action, action, total);
+    const end = clamp(analysisPhases.end ?? total, follow, total);
+    const parts = [
+      { start: 0, end: anticipation, type: 'other', label: '' },
+      { start: anticipation, end: action, type: 'anticipation', label: '予備動作' },
+      { start: action, end: follow, type: 'action', label: '本動作' },
+      { start: follow, end, type: 'follow', label: 'フォロー' },
+      { start: end, end: total, type: 'other', label: '' }
+    ].filter(part => part.end > part.start);
+    parts.forEach(part => {
+      const segment = document.createElement('div');
+      segment.className = `phase-segment ${part.type}`;
+      segment.style.flexGrow = String(part.end - part.start);
+      segment.textContent = part.label;
+      bar.append(segment);
+    });
+    const cursor = document.createElement('div');
+    cursor.className = 'phase-cursor';
+    bar.append(cursor);
+    updatePhaseCursor();
+    $('phaseAnticipation').textContent = analysisPhases.anticipation === null
+      ? '予備動作'
+      : `予備 ${analysisPhases.anticipation}F`;
+    $('phaseAction').textContent = analysisPhases.action === null ? '本動作' : `本動作 ${analysisPhases.action}F`;
+    $('phaseFollow').textContent = analysisPhases.follow === null
+      ? 'フォロースルー'
+      : `フォロー ${analysisPhases.follow}F`;
+    $('phaseEnd').textContent = analysisPhases.end === null ? '終了' : `終了 ${analysisPhases.end}F`;
+  }
+
+  function updatePhaseCursor() {
+    const cursor = $('phaseBar').querySelector('.phase-cursor');
+    if (!cursor) return;
+    cursor.style.left = `${clamp((analysisFrame() / phaseTotalFrames()) * 100, 0, 100)}%`;
+  }
+
+  function renderKeyPoses() {
+    const grid = $('poseGrid');
+    grid.replaceChildren();
+    if (!keyPoses.length) {
+      const item = document.createElement('div');
+      item.className = 'status';
+      item.textContent = '重要ポーズはまだありません';
+      grid.append(item);
+      return;
+    }
+    [...keyPoses].sort((a, b) => a.frame - b.frame).forEach(pose => {
+      const card = document.createElement('div');
+      card.className = 'pose-card';
+      card.dataset.id = pose.id;
+      const image = document.createElement('img');
+      image.className = 'pose-thumb';
+      image.src = pose.thumbnail;
+      image.alt = `${pose.frame}F`;
+      const info = document.createElement('div');
+      info.className = 'pose-info';
+      const seek = document.createElement('button');
+      seek.className = 'frame-chip';
+      seek.dataset.action = 'seek';
+      seek.textContent = `${pose.frame}F`;
+      const note = document.createElement('div');
+      note.className = 'pose-note';
+      note.textContent = pose.note || '重要ポーズ';
+      const actions = document.createElement('div');
+      actions.className = 'marker-actions';
+      const edit = document.createElement('button');
+      edit.className = 'layer-mini';
+      edit.dataset.action = 'edit';
+      edit.textContent = '✎';
+      const remove = document.createElement('button');
+      remove.className = 'layer-mini delete';
+      remove.dataset.action = 'delete';
+      remove.textContent = '×';
+      actions.append(edit, remove);
+      info.append(seek, note, actions);
+      card.append(image, info);
+      grid.append(card);
+    });
+  }
+
+  function renderAnalysisUi() {
+    $('onionPrev').value = String(onionPrev);
+    $('onionNext').value = String(onionNext);
+    $('onionOpacity').value = String(Math.round(onionOpacity * 100));
+    $('onionOpacityValue').textContent = String(Math.round(onionOpacity * 100));
+    $('toggleOnion').textContent = `オニオン ${onionEnabled ? 'ON' : 'OFF'}`;
+    $('toggleOnion').classList.toggle('primary', onionEnabled);
+    $('trackMode').classList.toggle('active', analysisMode === 'track');
+    $('guideMode').classList.toggle('active', analysisMode === 'guide');
+    $('trackControls').classList.toggle('hidden', analysisMode !== 'track');
+    $('guideControls').classList.toggle('hidden', analysisMode !== 'guide');
+    $('guidePen').classList.toggle('primary', guideTool === 'pen');
+    $('guideLine').classList.toggle('primary', guideTool === 'line');
+    $('toggleGuide').textContent = `ガイド ${guideVisible ? 'ON' : 'OFF'}`;
+    $('toggleGuide').classList.toggle('primary', guideVisible);
+    document.querySelectorAll('.guide-color').forEach(button => {
+      button.classList.toggle('active', button.dataset.guideColor === guideColor);
+    });
+    renderTrackerList();
+    renderPhaseBar();
+    renderKeyPoses();
+    updateAnalysisHud();
+    renderGuideCanvas();
+    renderAnalysisOverlay();
+    renderOnionSkin();
+  }
+
+  function updateAnalysisHud() {
+    $('analysisFrameHud').textContent = `F ${analysisFrame()}`;
+    $('analysisTimeHud').textContent = fmtTime(analysisCurrentTime);
+    if (analysisVideo.duration) {
+      $('analysisScrub').value = String(Math.round((analysisCurrentTime / analysisVideo.duration) * 1000));
+    } else {
+      $('analysisScrub').value = '0';
+    }
+    updatePhaseCursor();
+  }
+
+  function setAnalysisTime(time, autosave = true) {
+    const max = analysisVideo.duration ? Math.max(0, analysisVideo.duration - 0.001) : Math.max(0, Number(time) || 0);
+    analysisCurrentTime = clamp(Number(time) || 0, 0, max);
+    if (analysisVideo.src && analysisVideo.readyState >= 1) analysisVideo.currentTime = analysisCurrentTime;
+    updateAnalysisHud();
+    renderAnalysisOverlay();
+    renderOnionSkin();
+    if (autosave) queueAutosave(900);
+  }
+
+  function pauseAnalysis(autosave = true) {
+    analysisPlaying = false;
+    analysisVideo.pause();
+    $('analysisPlay').textContent = '▶︎';
+    renderOnionSkin();
+    if (autosave) queueAutosave(300);
+  }
+
+  function stepAnalysisFrames(amount) {
+    pauseAnalysis(false);
+    setAnalysisTime(analysisCurrentTime + amount / fps());
+  }
+
+  function analysisLoop() {
+    if (analysisPlaying) {
+      analysisCurrentTime = analysisVideo.currentTime || 0;
+      updateAnalysisHud();
+      renderAnalysisOverlay();
+      if (analysisVideo.ended) pauseAnalysis();
+    }
+    requestAnimationFrame(analysisLoop);
+  }
+
+  function captureAnalysisPoseThumbnail() {
+    if (!analysisVideo.videoWidth) return null;
+    const output = document.createElement('canvas');
+    output.width = 480;
+    output.height = 270;
+    const context = output.getContext('2d');
+    context.fillStyle = '#000';
+    context.fillRect(0, 0, output.width, output.height);
+    drawContained(context, analysisVideo, output.width, output.height);
+    if (guideVisible && guideData) context.drawImage(guideCanvas, 0, 0, output.width, output.height);
+    context.drawImage(analysisOverlayCanvas, 0, 0, output.width, output.height);
+    return output.toDataURL('image/jpeg', 0.86);
+  }
+
+  function addCurrentKeyPose() {
+    const thumbnail = captureAnalysisPoseThumbnail();
+    if (!thumbnail) {
+      $('poseGrid').textContent = '動画を先に選んでください';
+      return;
+    }
+    const current = analysisFrame();
+    const existing = keyPoses.find(pose => pose.frame === current);
+    const note = prompt('このポーズのメモ（空欄でもOK）', existing?.note || '');
+    if (note === null) return;
+    if (existing) {
+      existing.note = note.trim().slice(0, 120);
+      existing.thumbnail = thumbnail;
+    } else {
+      keyPoses.push({
+        id: uid(),
+        frame: current,
+        note: note.trim().slice(0, 120),
+        thumbnail
+      });
+    }
+    renderKeyPoses();
+    renderPhaseBar();
+    queueAutosave();
+  }
+
+  async function saveAnalysisSheet() {
+    if (!keyPoses.length) {
+      $('poseGrid').textContent = '重要ポーズを1枚以上追加してください';
+      return;
+    }
+    const poses = [...keyPoses].sort((a, b) => a.frame - b.frame);
+    const columns = 3;
+    const cellWidth = 500;
+    const cellHeight = 340;
+    const headerHeight = 170;
+    const rows = Math.ceil(poses.length / columns);
+    const output = document.createElement('canvas');
+    output.width = columns * cellWidth;
+    output.height = headerHeight + rows * cellHeight + 30;
+    const context = output.getContext('2d');
+    context.fillStyle = '#0b0d11';
+    context.fillRect(0, 0, output.width, output.height);
+    context.fillStyle = '#fff';
+    context.font = '800 42px sans-serif';
+    context.fillText(`${projectName}・アニメーション分析`, 34, 54);
+    context.fillStyle = '#aeb6c8';
+    context.font = '600 24px sans-serif';
+    const phaseText = [
+      ['予備動作', analysisPhases.anticipation],
+      ['本動作', analysisPhases.action],
+      ['フォロースルー', analysisPhases.follow],
+      ['終了', analysisPhases.end]
+    ].filter(([, value]) => value !== null).map(([label, value]) => `${label} ${value}F`).join(' ／ ');
+    context.fillText(phaseText || '動作区間：未設定', 34, 98);
+    const trackerText = trackers
+      .map(tracker => `${tracker.name} ${Object.keys(tracker.points || {}).length}点`)
+      .join(' ／ ');
+    context.fillText(trackerText || '軌跡：未設定', 34, 136);
+
+    for (let index = 0; index < poses.length; index += 1) {
+      const pose = poses[index];
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+      const x = column * cellWidth + 18;
+      const y = headerHeight + row * cellHeight;
+      const image = await getImage(pose.thumbnail);
+      context.fillStyle = '#151821';
+      context.fillRect(x, y, cellWidth - 36, cellHeight - 18);
+      if (image) context.drawImage(image, x + 8, y + 8, cellWidth - 52, 252);
+      context.fillStyle = '#ff4fa3';
+      context.font = '800 28px sans-serif';
+      context.fillText(`${pose.frame}F`, x + 12, y + 296);
+      context.fillStyle = '#fff';
+      context.font = '600 20px sans-serif';
+      context.fillText((pose.note || '重要ポーズ').slice(0, 28), x + 100, y + 296);
+    }
+    output.toBlob(blob => {
+      if (blob) downloadBlob(blob, `${safeFilename(projectName)}_analysis-sheet.png`);
+    }, 'image/png');
+  }
+
   function renderMemos() {
     const search = ($('memoSearch').value || '').trim().toLowerCase();
     const list = $('noteList');
@@ -1867,6 +2502,7 @@
   document.querySelectorAll('.tab').forEach(button => {
     button.addEventListener('click', () => {
       if (button.dataset.tab !== 'comparePanel' && comparePlaying) pauseComparison();
+      if (button.dataset.tab !== 'analysisPanel' && analysisPlaying) pauseAnalysis();
       document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab === button));
       document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('active', panel.id === button.dataset.tab));
       if (button.dataset.tab === 'videoPanel') {
@@ -1874,6 +2510,14 @@
       } else if (button.dataset.tab === 'comparePanel') {
         video.pause();
         renderCompareUi();
+      } else if (button.dataset.tab === 'analysisPanel') {
+        video.pause();
+        pauseComparison(false);
+        requestAnimationFrame(() => {
+          resizeAnalysisCanvases();
+          setAnalysisTime(analysisCurrentTime, false);
+          renderAnalysisUi();
+        });
       } else if (button.dataset.tab === 'memoPanel') {
         $('memoFrameLabel').textContent = `${frame()}F`;
       } else if (button.dataset.tab === 'exportPanel') {
@@ -2119,6 +2763,311 @@
     }
   });
 
+  analysisVideo.addEventListener('loadedmetadata', () => {
+    $('analysisEmpty').classList.add('hidden');
+    analysisVideo.playbackRate = Number(speedInput.value) || 1;
+    setAnalysisTime(analysisCurrentTime, false);
+    requestAnimationFrame(() => {
+      resizeAnalysisCanvases();
+      renderPhaseBar();
+    });
+  });
+  analysisVideo.addEventListener('seeked', () => {
+    analysisCurrentTime = analysisVideo.currentTime || 0;
+    updateAnalysisHud();
+    renderAnalysisOverlay();
+    renderOnionSkin();
+  });
+  analysisVideo.addEventListener('play', () => {
+    analysisPlaying = true;
+    $('analysisPlay').textContent = '❚❚';
+    analysisRenderToken += 1;
+    clearContext(onionCtx, onionCanvas);
+  });
+  analysisVideo.addEventListener('pause', () => {
+    analysisPlaying = false;
+    $('analysisPlay').textContent = '▶︎';
+    renderOnionSkin();
+    queueAutosave(300);
+  });
+  analysisVideo.addEventListener('ended', () => pauseAnalysis());
+
+  $('analysisPlay').addEventListener('click', () => {
+    if (!analysisVideo.src || analysisVideo.readyState < 1) {
+      $('poseGrid').textContent = '動画ページで参考動画を先に選んでください';
+      return;
+    }
+    if (analysisVideo.paused) {
+      analysisVideo.playbackRate = Number(speedInput.value) || 1;
+      analysisVideo.play().catch(() => {
+        $('poseGrid').textContent = '動画を再生できませんでした';
+      });
+    } else {
+      pauseAnalysis();
+    }
+  });
+  $('analysisBack5').addEventListener('click', () => stepAnalysisFrames(-5));
+  $('analysisBack1').addEventListener('click', () => stepAnalysisFrames(-1));
+  $('analysisNext1').addEventListener('click', () => stepAnalysisFrames(1));
+  $('analysisNext5').addEventListener('click', () => stepAnalysisFrames(5));
+  $('analysisScrub').addEventListener('input', event => {
+    pauseAnalysis(false);
+    if (analysisVideo.duration) {
+      setAnalysisTime((Number(event.target.value) / 1000) * analysisVideo.duration);
+    }
+  });
+
+  $('onionPrev').addEventListener('change', event => {
+    onionPrev = clamp(Number(event.target.value) || 0, 0, 3);
+    renderOnionSkin();
+    queueAutosave();
+  });
+  $('onionNext').addEventListener('change', event => {
+    onionNext = clamp(Number(event.target.value) || 0, 0, 3);
+    renderOnionSkin();
+    queueAutosave();
+  });
+  $('onionOpacity').addEventListener('input', event => {
+    onionOpacity = clamp(Number(event.target.value) / 100, 0.05, 0.7);
+    $('onionOpacityValue').textContent = String(Math.round(onionOpacity * 100));
+    renderOnionSkin();
+    queueAutosave();
+  });
+  $('toggleOnion').addEventListener('click', () => {
+    onionEnabled = !onionEnabled;
+    renderAnalysisUi();
+    queueAutosave();
+  });
+
+  $('trackMode').addEventListener('click', () => {
+    analysisMode = 'track';
+    renderAnalysisUi();
+    queueAutosave();
+  });
+  $('guideMode').addEventListener('click', () => {
+    analysisMode = 'guide';
+    renderAnalysisUi();
+    queueAutosave();
+  });
+  $('addTracker').addEventListener('click', () => {
+    const name = prompt('軌跡の名前', `軌跡 ${trackers.length + 1}`);
+    if (name === null) return;
+    const tracker = makeTracker(name.trim().slice(0, 40) || `軌跡 ${trackers.length + 1}`);
+    trackers.push(tracker);
+    activeTrackerId = tracker.id;
+    renderTrackerList();
+    renderAnalysisOverlay();
+    queueAutosave();
+  });
+  $('renameTracker').addEventListener('click', () => {
+    const tracker = activeTracker();
+    const name = prompt('軌跡の名前', tracker.name);
+    if (name === null || !name.trim()) return;
+    tracker.name = name.trim().slice(0, 40);
+    renderTrackerList();
+    renderAnalysisOverlay();
+    queueAutosave();
+  });
+  $('deleteTracker').addEventListener('click', () => {
+    ensureTrackers();
+    if (trackers.length <= 1) {
+      $('trackerList').title = '軌跡は1つ以上必要です';
+      return;
+    }
+    const tracker = activeTracker();
+    if (Object.keys(tracker.points || {}).length && !confirm(`「${tracker.name}」と登録した点を削除しますか？`)) return;
+    const index = trackers.findIndex(item => item.id === tracker.id);
+    trackers.splice(index, 1);
+    activeTrackerId = trackers[Math.min(index, trackers.length - 1)].id;
+    renderTrackerList();
+    renderAnalysisOverlay();
+    queueAutosave();
+  });
+  $('deleteTrackPoint').addEventListener('click', () => {
+    const tracker = activeTracker();
+    delete tracker.points[analysisFrame()];
+    renderTrackerList();
+    renderAnalysisOverlay();
+    queueAutosave();
+  });
+  $('trackerList').addEventListener('click', event => {
+    const button = event.target.closest('.tracker-chip');
+    if (!button || !trackers.some(tracker => tracker.id === button.dataset.id)) return;
+    activeTrackerId = button.dataset.id;
+    renderTrackerList();
+    renderAnalysisOverlay();
+    queueAutosave();
+  });
+
+  $('guidePen').addEventListener('click', () => {
+    guideTool = 'pen';
+    renderAnalysisUi();
+    queueAutosave();
+  });
+  $('guideLine').addEventListener('click', () => {
+    guideTool = 'line';
+    renderAnalysisUi();
+    queueAutosave();
+  });
+  $('toggleGuide').addEventListener('click', () => {
+    guideVisible = !guideVisible;
+    renderAnalysisUi();
+    queueAutosave();
+  });
+  $('clearGuide').addEventListener('click', () => {
+    if (guideData && !confirm('全フレーム共通ガイドを消去しますか？')) return;
+    guideData = null;
+    clearContext(guideCtx, guideCanvas);
+    queueAutosave();
+  });
+  document.querySelectorAll('.guide-color').forEach(button => {
+    button.addEventListener('click', () => {
+      guideColor = button.dataset.guideColor;
+      document.querySelectorAll('.guide-color').forEach(item => item.classList.toggle('active', item === button));
+      queueAutosave();
+    });
+  });
+
+  const setCurrentTrackerPoint = point => {
+    if (!analysisVideo.src || !analysisVideo.videoWidth) return;
+    const tracker = activeTracker();
+    tracker.points[analysisFrame()] = {
+      x: clamp(point.x / Math.max(1, analysisOverlayCanvas.clientWidth), 0, 1),
+      y: clamp(point.y / Math.max(1, analysisOverlayCanvas.clientHeight), 0, 1)
+    };
+    renderTrackerList();
+    renderAnalysisOverlay();
+  };
+
+  analysisOverlayCanvas.addEventListener('pointerdown', event => {
+    if (!analysisVideo.src || !analysisVideo.videoWidth) return;
+    event.preventDefault();
+    pauseAnalysis(false);
+    try {
+      analysisOverlayCanvas.setPointerCapture(event.pointerId);
+    } catch (_) {}
+    const point = analysisPointFromEvent(event);
+    if (analysisMode === 'track') {
+      analysisTrackPointerId = event.pointerId;
+      setCurrentTrackerPoint(point);
+      return;
+    }
+    guidePointerId = event.pointerId;
+    guideDrawing = true;
+    guideStartPoint = point;
+    guideLastPoint = point;
+    guideSnapshot = guideCtx.getImageData(0, 0, guideCanvas.width, guideCanvas.height);
+    prepareGuideContext();
+    if (guideTool === 'pen') {
+      guideCtx.beginPath();
+      guideCtx.moveTo(point.x, point.y);
+    }
+  });
+  analysisOverlayCanvas.addEventListener('pointermove', event => {
+    if (event.pointerId === analysisTrackPointerId && analysisMode === 'track') {
+      event.preventDefault();
+      setCurrentTrackerPoint(analysisPointFromEvent(event));
+      return;
+    }
+    if (!guideDrawing || event.pointerId !== guidePointerId || analysisMode !== 'guide') return;
+    event.preventDefault();
+    const point = analysisPointFromEvent(event);
+    prepareGuideContext();
+    if (guideTool === 'line') {
+      guideCtx.putImageData(guideSnapshot, 0, 0);
+      prepareGuideContext();
+      guideCtx.beginPath();
+      guideCtx.moveTo(guideStartPoint.x, guideStartPoint.y);
+      guideCtx.lineTo(point.x, point.y);
+      guideCtx.stroke();
+    } else {
+      guideCtx.lineTo(point.x, point.y);
+      guideCtx.stroke();
+      guideCtx.beginPath();
+      guideCtx.moveTo(point.x, point.y);
+    }
+    guideLastPoint = point;
+  });
+  const finishAnalysisPointer = event => {
+    if (event.pointerId === analysisTrackPointerId) {
+      analysisTrackPointerId = null;
+      queueAutosave();
+      return;
+    }
+    if (!guideDrawing || event.pointerId !== guidePointerId) return;
+    event.preventDefault();
+    const point = analysisPointFromEvent(event);
+    prepareGuideContext();
+    if (guideTool === 'line') {
+      guideCtx.putImageData(guideSnapshot, 0, 0);
+      prepareGuideContext();
+      guideCtx.beginPath();
+      guideCtx.moveTo(guideStartPoint.x, guideStartPoint.y);
+      guideCtx.lineTo(point.x, point.y);
+      guideCtx.stroke();
+    } else if (
+      Math.hypot(point.x - guideStartPoint.x, point.y - guideStartPoint.y) < 2
+    ) {
+      guideCtx.beginPath();
+      guideCtx.arc(point.x, point.y, guideSize / 2, 0, Math.PI * 2);
+      guideCtx.fill();
+    }
+    guideDrawing = false;
+    guidePointerId = null;
+    guideStartPoint = null;
+    guideLastPoint = null;
+    guideSnapshot = null;
+    saveGuideCanvas();
+  };
+  analysisOverlayCanvas.addEventListener('pointerup', finishAnalysisPointer);
+  analysisOverlayCanvas.addEventListener('pointercancel', finishAnalysisPointer);
+
+  const setPhaseAtCurrentFrame = type => {
+    analysisPhases[type] = analysisFrame();
+    renderPhaseBar();
+    queueAutosave();
+  };
+  $('phaseAnticipation').addEventListener('click', () => setPhaseAtCurrentFrame('anticipation'));
+  $('phaseAction').addEventListener('click', () => setPhaseAtCurrentFrame('action'));
+  $('phaseFollow').addEventListener('click', () => setPhaseAtCurrentFrame('follow'));
+  $('phaseEnd').addEventListener('click', () => setPhaseAtCurrentFrame('end'));
+  $('clearPhases').addEventListener('click', () => {
+    analysisPhases = { anticipation: null, action: null, follow: null, end: null };
+    renderPhaseBar();
+    queueAutosave();
+  });
+  $('phaseBar').addEventListener('click', event => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const ratio = clamp((event.clientX - rect.left) / Math.max(1, rect.width), 0, 1);
+    pauseAnalysis(false);
+    setAnalysisTime((ratio * phaseTotalFrames()) / fps());
+  });
+
+  $('addKeyPose').addEventListener('click', addCurrentKeyPose);
+  $('saveAnalysisSheet').addEventListener('click', saveAnalysisSheet);
+  $('poseGrid').addEventListener('click', event => {
+    const card = event.target.closest('.pose-card');
+    const action = event.target.closest('[data-action]')?.dataset.action;
+    if (!card || !action) return;
+    const pose = keyPoses.find(item => item.id === card.dataset.id);
+    if (!pose) return;
+    if (action === 'seek') {
+      pauseAnalysis(false);
+      setAnalysisTime(pose.frame / fps());
+    } else if (action === 'edit') {
+      const note = prompt('重要ポーズのメモ', pose.note || '');
+      if (note === null) return;
+      pose.note = note.trim().slice(0, 120);
+      renderKeyPoses();
+      queueAutosave();
+    } else if (action === 'delete') {
+      keyPoses = keyPoses.filter(item => item.id !== pose.id);
+      renderKeyPoses();
+      renderPhaseBar();
+      queueAutosave();
+    }
+  });
+
   $('back5').addEventListener('click', () => stepFrames(-5));
   $('back1').addEventListener('click', () => stepFrames(-1));
   $('next1').addEventListener('click', () => stepFrames(1));
@@ -2134,12 +3083,15 @@
   fpsInput.addEventListener('change', () => {
     fpsInput.value = String(fps());
     currentLoadedFrame = -1;
+    onionFrameCache.clear();
     updateHud(true);
     renderCompareUi();
+    renderAnalysisUi();
     queueAutosave();
   });
   speedInput.addEventListener('change', () => {
     video.playbackRate = Number(speedInput.value) || 1;
+    analysisVideo.playbackRate = Number(speedInput.value) || 1;
     queueAutosave();
   });
   $('setA').addEventListener('click', () => {
@@ -2425,7 +3377,7 @@
     await saveProjectNow();
     const payload = {
       format: 'Animation Coach',
-      version: '0.6',
+      version: '0.7',
       exportedAt: new Date().toISOString(),
       project: serializeProject()
     };
@@ -2460,7 +3412,10 @@
 
   window.addEventListener('resize', () => {
     clearTimeout(window.__animationCoachResizeTimer);
-    window.__animationCoachResizeTimer = setTimeout(resizeCanvases, 120);
+    window.__animationCoachResizeTimer = setTimeout(() => {
+      resizeCanvases();
+      resizeAnalysisCanvases();
+    }, 120);
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') saveProjectNow();
@@ -2477,9 +3432,11 @@
   renderLayerList();
   renderMemos();
   renderCompareUi();
+  renderAnalysisUi();
   applyViewTransform();
   applyLayerVisibility();
   animationLoop();
   comparisonLoop();
+  analysisLoop();
   initPersistence();
 })();
