@@ -22,12 +22,16 @@
   const compareOwnVideo = $('compareOwnVideo');
   const analysisVideo = $('analysisVideo');
   const analysisFrameLoader = $('analysisFrameLoader');
+  const reviewVideo = $('reviewVideo');
+  const memoVideo = $('memoVideo');
   const onionCanvas = $('onionCanvas');
   const guideCanvas = $('guideCanvas');
   const analysisOverlayCanvas = $('analysisOverlayCanvas');
+  const spacingChartCanvas = $('spacingChartCanvas');
   const onionCtx = onionCanvas.getContext('2d');
   const guideCtx = guideCanvas.getContext('2d');
   const analysisOverlayCtx = analysisOverlayCanvas.getContext('2d');
+  const spacingChartCtx = spacingChartCanvas.getContext('2d');
 
   const DB_NAME = 'animation-coach-v04';
   const DB_VERSION = 2;
@@ -83,6 +87,10 @@
   let onionNext = 1;
   let onionOpacity = 0.25;
   let analysisMode = 'track';
+  let analysisSource = 'ref';
+  let speedColorsEnabled = true;
+  let autoTracking = false;
+  let spacingChartFrameMax = 1;
   let trackers = [];
   let activeTrackerId = '';
   let guideData = null;
@@ -102,6 +110,25 @@
   let onionCaptureChain = Promise.resolve();
   const onionFrameCache = new Map();
   const onionFramePromises = new Map();
+
+  let reviewCurrentTime = 0;
+  let reviewPlaying = false;
+  let reviewItems = [];
+  let reviewStatusFilter = 'all';
+  let reviewTagFilter = 'all';
+  let coachTaskType = 'attack';
+  let coachChecks = {
+    poses: false,
+    balance: false,
+    contact: false,
+    spacing: false,
+    issues: false,
+    compare: false
+  };
+  let coachReportCreated = false;
+  let motionVersions = [];
+  let motionVersionPreviewId = '';
+  let tutorialStep = 0;
 
   let layers = [];
   let activeLayerId = '';
@@ -141,8 +168,13 @@
     id: uid(),
     name,
     color: trackerPalette[trackers.length % trackerPalette.length],
-    points: {}
+    points: {},
+    ownPoints: {}
   });
+
+  const trackerPoints = (tracker, source = analysisSource) => (
+    source === 'own' ? tracker.ownPoints || (tracker.ownPoints = {}) : tracker.points || (tracker.points = {})
+  );
 
   function ensureTrackers() {
     if (!trackers.length) trackers = [makeTracker('軌跡 1')];
@@ -272,12 +304,14 @@
     ensureLayers();
     return {
       id: projectId,
-      version: '0.7',
+      version: '1.0',
       name: projectName,
       createdAt: projectCreatedAt,
       updatedAt: Date.now(),
       videoName,
-      currentTime: video.currentTime || 0,
+      currentTime: $('memoPanel').classList.contains('active') && memoVideo.src
+        ? memoVideo.currentTime || 0
+        : video.currentTime || 0,
       fps: fps(),
       speed: Number(speedInput.value) || 1,
       A,
@@ -318,11 +352,14 @@
         onionNext,
         onionOpacity,
         mode: analysisMode,
+        source: analysisSource,
+        speedColorsEnabled,
         trackers: trackers.map(tracker => ({
           id: tracker.id,
           name: tracker.name,
           color: tracker.color,
-          points: { ...tracker.points }
+          points: { ...tracker.points },
+          ownPoints: { ...(tracker.ownPoints || {}) }
         })),
         activeTrackerId,
         guideData,
@@ -332,6 +369,18 @@
         guideSize,
         keyPoses: keyPoses.map(pose => ({ ...pose })),
         phases: { ...analysisPhases }
+      },
+      review: {
+        currentTime: reviewCurrentTime,
+        items: reviewItems.map(item => ({ ...item })),
+        statusFilter: reviewStatusFilter,
+        tagFilter: reviewTagFilter
+      },
+      coach: {
+        taskType: coachTaskType,
+        checks: { ...coachChecks },
+        reportCreated: coachReportCreated,
+        versions: motionVersions.map(version => ({ ...version }))
       },
       view: { zoomScale, panX, panY },
       drawing: { tool, color, brushSize, textSize }
@@ -477,12 +526,15 @@
       : 1;
     onionOpacity = clamp(Number(record.analysis?.onionOpacity) || 0.25, 0.05, 0.7);
     analysisMode = record.analysis?.mode === 'guide' ? 'guide' : 'track';
+    analysisSource = record.analysis?.source === 'own' ? 'own' : 'ref';
+    speedColorsEnabled = record.analysis?.speedColorsEnabled !== false;
     trackers = Array.isArray(record.analysis?.trackers) && record.analysis.trackers.length
       ? record.analysis.trackers.map((tracker, index) => ({
         id: tracker.id || uid(),
         name: String(tracker.name || `軌跡 ${index + 1}`).slice(0, 40),
         color: tracker.color || trackerPalette[index % trackerPalette.length],
-        points: tracker.points && typeof tracker.points === 'object' ? { ...tracker.points } : {}
+        points: tracker.points && typeof tracker.points === 'object' ? { ...tracker.points } : {},
+        ownPoints: tracker.ownPoints && typeof tracker.ownPoints === 'object' ? { ...tracker.ownPoints } : {}
       }))
       : [makeTracker('軌跡 1')];
     activeTrackerId = record.analysis?.activeTrackerId || trackers[0].id;
@@ -497,6 +549,7 @@
         .map(pose => ({
           id: pose.id || uid(),
           frame: Math.max(0, Number(pose.frame) || 0),
+          source: pose.source === 'own' ? 'own' : 'ref',
           note: typeof pose.note === 'string' ? pose.note : '',
           thumbnail: pose.thumbnail
         }))
@@ -507,6 +560,49 @@
       follow: Number.isFinite(record.analysis?.phases?.follow) ? Math.max(0, record.analysis.phases.follow) : null,
       end: Number.isFinite(record.analysis?.phases?.end) ? Math.max(0, record.analysis.phases.end) : null
     };
+    reviewCurrentTime = Math.max(0, Number(record.review?.currentTime) || Number(record.currentTime) || 0);
+    reviewItems = Array.isArray(record.review?.items)
+      ? record.review.items
+        .filter(item => item && typeof item === 'object')
+        .map(item => ({
+          id: item.id || uid(),
+          frame: Math.max(0, Number(item.frame) || 0),
+          tag: ['重心', 'シルエット', 'タイミング', '足滑り', 'ポーズ', '軌道', 'その他'].includes(item.tag)
+            ? item.tag
+            : 'その他',
+          status: ['todo', 'progress', 'done'].includes(item.status) ? item.status : 'todo',
+          note: typeof item.note === 'string' ? item.note.slice(0, 160) : '',
+          createdAt: Number(item.createdAt) || Date.now()
+        }))
+      : [];
+    reviewStatusFilter = ['all', 'open', 'todo', 'progress', 'done'].includes(record.review?.statusFilter)
+      ? record.review.statusFilter
+      : 'all';
+    reviewTagFilter = ['all', '重心', 'シルエット', 'タイミング', '足滑り', 'ポーズ', '軌道', 'その他'].includes(record.review?.tagFilter)
+      ? record.review.tagFilter
+      : 'all';
+    coachTaskType = ['walk', 'run', 'attack', 'idle', 'creature', 'other'].includes(record.coach?.taskType)
+      ? record.coach.taskType
+      : 'attack';
+    coachChecks = {
+      poses: Boolean(record.coach?.checks?.poses),
+      balance: Boolean(record.coach?.checks?.balance),
+      contact: Boolean(record.coach?.checks?.contact),
+      spacing: Boolean(record.coach?.checks?.spacing),
+      issues: Boolean(record.coach?.checks?.issues),
+      compare: Boolean(record.coach?.checks?.compare)
+    };
+    coachReportCreated = Boolean(record.coach?.reportCreated);
+    motionVersions = Array.isArray(record.coach?.versions)
+      ? record.coach.versions
+        .filter(version => version && typeof version === 'object')
+        .map(version => ({
+          id: version.id || uid(),
+          label: String(version.label || '保存版').slice(0, 60),
+          name: String(version.name || ''),
+          createdAt: Number(version.createdAt) || Date.now()
+        }))
+      : [];
     zoomScale = clamp(Number(record.view?.zoomScale) || 1, 1, 4);
     panX = Number(record.view?.panX) || 0;
     panY = Number(record.view?.panY) || 0;
@@ -541,6 +637,7 @@
     renderLayerList();
     renderCompareUi();
     renderAnalysisUi();
+    renderReviewUi();
     applyViewTransform();
     applyLayerVisibility();
     updateHud(true);
@@ -565,6 +662,8 @@
     video.pause();
     compareRefVideo.pause();
     analysisVideo.pause();
+    reviewVideo.pause();
+    memoVideo.pause();
     analysisPlaying = false;
     analysisCurrentTime = 0;
     onionFrameCache.clear();
@@ -574,22 +673,31 @@
     compareRefVideo.removeAttribute('src');
     analysisVideo.removeAttribute('src');
     analysisFrameLoader.removeAttribute('src');
+    reviewVideo.removeAttribute('src');
+    memoVideo.removeAttribute('src');
     video.load();
     compareRefVideo.load();
     analysisVideo.load();
     analysisFrameLoader.load();
+    reviewVideo.load();
+    memoVideo.load();
     empty.classList.remove('hidden');
     $('compareRefEmpty').classList.remove('hidden');
     $('analysisEmpty').classList.remove('hidden');
+    $('reviewEmpty').classList.remove('hidden');
+    $('memoVideoEmpty').classList.remove('hidden');
     scrub.value = '0';
     currentLoadedFrame = -1;
     renderCurrentFrame(0);
+    renderCoachUi();
   }
 
   function loadVideoBlob(blob, name = '') {
     return new Promise((resolve, reject) => {
       video.pause();
       analysisVideo.pause();
+      reviewVideo.pause();
+      memoVideo.pause();
       analysisPlaying = false;
       analysisRenderToken += 1;
       onionFrameCache.clear();
@@ -599,10 +707,14 @@
       compareRefVideo.src = objectUrl;
       analysisVideo.src = objectUrl;
       analysisFrameLoader.src = objectUrl;
+      reviewVideo.src = objectUrl;
+      memoVideo.src = objectUrl;
       videoName = name || videoName;
       empty.classList.add('hidden');
       $('compareRefEmpty').classList.add('hidden');
       $('analysisEmpty').classList.add('hidden');
+      $('reviewEmpty').classList.add('hidden');
+      $('memoVideoEmpty').classList.add('hidden');
       const onLoaded = () => {
         cleanup();
         const end = Math.max(0, (video.duration || 0) - 0.001);
@@ -610,6 +722,8 @@
         pendingResumeTime = 0;
         resizeCanvases();
         updateHud(true);
+        if (analysisSource === 'own' && compareOwnObjectUrl) applyAnalysisSource('own', false);
+        renderCoachUi();
         resolve();
       };
       const onError = () => {
@@ -626,6 +740,8 @@
       compareRefVideo.load();
       analysisVideo.load();
       analysisFrameLoader.load();
+      reviewVideo.load();
+      memoVideo.load();
     });
   }
 
@@ -635,21 +751,27 @@
     compareOwnVideo.removeAttribute('src');
     compareOwnVideo.load();
     compareOwnVideoName = '';
+    motionVersionPreviewId = '';
     $('compareOwnEmpty').classList.remove('hidden');
+    if (analysisSource === 'own') applyAnalysisSource('ref', false);
+    renderCoachUi();
   }
 
-  function loadCompareOwnBlob(blob, name = '') {
+  function loadCompareOwnBlob(blob, name = '', { versionId = '' } = {}) {
     return new Promise((resolve, reject) => {
       compareOwnVideo.pause();
       revokeCompareOwnUrl();
       compareOwnObjectUrl = URL.createObjectURL(blob);
       compareOwnVideo.src = compareOwnObjectUrl;
-      compareOwnVideoName = name || compareOwnVideoName;
+      motionVersionPreviewId = versionId;
+      if (!versionId) compareOwnVideoName = name || compareOwnVideoName;
       $('compareOwnEmpty').classList.add('hidden');
       const onLoaded = () => {
         cleanup();
         setCompareTime(compareCurrentTime, false);
         renderCompareUi();
+        if (analysisSource === 'own') applyAnalysisSource('own', false);
+        renderCoachUi();
         resolve();
       };
       const onError = () => {
@@ -666,10 +788,50 @@
     });
   }
 
+  function applyAnalysisSource(nextSource, showMessage = true) {
+    const next = nextSource === 'own' ? 'own' : 'ref';
+    const targetUrl = next === 'own' ? compareOwnObjectUrl : objectUrl;
+    if (!targetUrl) {
+      if (showMessage) {
+        $('analysisSourceHint').textContent = next === 'own'
+          ? '比較ページで修正後動画を選んでください'
+          : '動画ページで修正前動画を選んでください';
+      }
+      return false;
+    }
+    pauseAnalysis(false);
+    analysisSource = next;
+    analysisRenderToken += 1;
+    onionFrameCache.clear();
+    onionFramePromises.clear();
+    if (analysisVideo.src !== targetUrl) {
+      analysisVideo.src = targetUrl;
+      analysisFrameLoader.src = targetUrl;
+      analysisVideo.load();
+      analysisFrameLoader.load();
+    } else {
+      setAnalysisTime(analysisCurrentTime, false);
+    }
+    $('analysisEmpty').classList.add('hidden');
+    renderAnalysisUi();
+    queueAutosave();
+    return true;
+  }
+
   async function restoreProject(record) {
     applyProjectRecord(record);
     localStorage.setItem(LAST_PROJECT_KEY, projectId);
     const videoRecord = await storeGet(VIDEO_STORE, projectId).catch(() => null);
+    if (Array.isArray(videoRecord?.versions)) {
+      motionVersions = videoRecord.versions
+        .filter(version => version && version.id)
+        .map(version => ({
+          id: version.id,
+          label: String(version.label || '保存版').slice(0, 60),
+          name: String(version.name || ''),
+          createdAt: Number(version.createdAt) || Date.now()
+        }));
+    }
     if (videoRecord?.blob) {
       try {
         await loadVideoBlob(videoRecord.blob, videoRecord.name || record.videoName);
@@ -693,10 +855,13 @@
     }
     setCompareTime(compareCurrentTime, false);
     setAnalysisTime(analysisCurrentTime, false);
+    setReviewTime(reviewCurrentTime, false);
+    setMemoVideoTime(video.currentTime || 0, false);
     renderLayerList();
     renderMemos();
     renderCurrentFrame(frame());
     renderAnalysisUi();
+    renderReviewUi();
   }
 
   async function createNewProject({ saveCurrent = true } = {}) {
@@ -743,6 +908,9 @@
     onionNext = 1;
     onionOpacity = 0.25;
     analysisMode = 'track';
+    analysisSource = 'ref';
+    speedColorsEnabled = true;
+    autoTracking = false;
     trackers = [];
     trackers = [makeTracker('軌跡 1')];
     activeTrackerId = trackers[0].id;
@@ -753,6 +921,22 @@
     guideSize = 5;
     keyPoses = [];
     analysisPhases = { anticipation: null, action: null, follow: null, end: null };
+    reviewCurrentTime = 0;
+    reviewPlaying = false;
+    reviewItems = [];
+    reviewStatusFilter = 'all';
+    reviewTagFilter = 'all';
+    coachTaskType = 'attack';
+    coachChecks = {
+      poses: false,
+      balance: false,
+      contact: false,
+      spacing: false,
+      issues: false,
+      compare: false
+    };
+    coachReportCreated = false;
+    motionVersions = [];
     onionFrameCache.clear();
     pendingResumeTime = 0;
     fpsInput.value = '30';
@@ -768,6 +952,7 @@
     renderMemos();
     renderCompareUi();
     renderAnalysisUi();
+    renderReviewUi();
     applyViewTransform();
     applyLayerVisibility();
     localStorage.setItem(LAST_PROJECT_KEY, projectId);
@@ -1641,6 +1826,10 @@
     $('compareVideos').style.setProperty('--compare-opacity', String(compareOpacity));
     $('compareOpacity').value = String(Math.round(compareOpacity * 100));
     $('compareOpacityValue').textContent = String(Math.round(compareOpacity * 100));
+    const previewVersion = motionVersions.find(version => version.id === motionVersionPreviewId);
+    $('compareOwnLabel').textContent = previewVersion
+      ? `修正後・保存版：${previewVersion.label}`
+      : '修正後・自作';
     $('syncRefFrame').value = String(Math.round(compareSyncRefTime * fps()));
     $('syncOwnFrame').value = String(Math.round(compareSyncOwnTime * fps()));
     $('compareSetA').textContent = compareA === null ? '比較A点' : `A ${Math.round(compareA * fps())}F`;
@@ -1839,6 +2028,7 @@
     renderGuideCanvas();
     renderAnalysisOverlay();
     renderOnionSkin();
+    renderSpacingAnalysis();
   }
 
   function analysisPointFromEvent(event) {
@@ -1970,6 +2160,56 @@
     queueAutosave();
   }
 
+  function sortedMotionPoints(pointMap) {
+    return Object.entries(pointMap || {})
+      .map(([frameNumber, point]) => ({ frame: Number(frameNumber), ...point }))
+      .filter(point => Number.isFinite(point.frame) && Number.isFinite(point.x) && Number.isFinite(point.y))
+      .sort((a, b) => a.frame - b.frame);
+  }
+
+  function motionSegments(pointMap) {
+    const points = sortedMotionPoints(pointMap);
+    return points.slice(1).map((point, index) => {
+      const previous = points[index];
+      const frameGap = Math.max(1, point.frame - previous.frame);
+      return {
+        startFrame: previous.frame,
+        frame: point.frame,
+        start: previous,
+        end: point,
+        speed: (Math.hypot(point.x - previous.x, point.y - previous.y) * 100) / frameGap
+      };
+    });
+  }
+
+  function speedColor(speed, minimum, maximum) {
+    const ratio = maximum > minimum ? clamp((speed - minimum) / (maximum - minimum), 0, 1) : 0.5;
+    const hue = 215 * (1 - ratio);
+    return `hsl(${hue} 92% 60%)`;
+  }
+
+  function spacingIssuesFor(segments) {
+    if (segments.length < 2) return [];
+    const average = segments.reduce((sum, segment) => sum + segment.speed, 0) / segments.length;
+    const issues = [];
+    segments.forEach((segment, index) => {
+      const previous = segments[index - 1];
+      if (!previous) return;
+      if (
+        segment.speed > Math.max(previous.speed * 1.8, average * 1.55)
+        && segment.speed - previous.speed > 0.12
+      ) {
+        issues.push({ frame: segment.frame, type: 'fast', label: '急加速', speed: segment.speed });
+      } else if (
+        previous.speed > 0.08
+        && segment.speed < Math.min(previous.speed * 0.48, average * 0.55)
+      ) {
+        issues.push({ frame: segment.frame, type: 'slow', label: '急減速', speed: segment.speed });
+      }
+    });
+    return issues;
+  }
+
   function renderAnalysisOverlay() {
     clearContext(analysisOverlayCtx, analysisOverlayCanvas);
     ensureTrackers();
@@ -1977,29 +2217,32 @@
     const height = analysisOverlayCanvas.clientHeight;
     const current = analysisFrame();
     trackers.forEach(tracker => {
-      const points = Object.entries(tracker.points || {})
-        .map(([frameNumber, point]) => ({ frame: Number(frameNumber), ...point }))
-        .filter(point => Number.isFinite(point.frame) && Number.isFinite(point.x) && Number.isFinite(point.y))
-        .sort((a, b) => a.frame - b.frame);
+      const pointMap = trackerPoints(tracker);
+      const points = sortedMotionPoints(pointMap);
       if (!points.length) return;
+      const segments = motionSegments(pointMap);
+      const speeds = segments.map(segment => segment.speed);
+      const minimumSpeed = speeds.length ? Math.min(...speeds) : 0;
+      const maximumSpeed = speeds.length ? Math.max(...speeds) : 1;
       analysisOverlayCtx.save();
-      analysisOverlayCtx.strokeStyle = tracker.color;
       analysisOverlayCtx.fillStyle = tracker.color;
       analysisOverlayCtx.lineWidth = 3;
       analysisOverlayCtx.lineCap = 'round';
       analysisOverlayCtx.lineJoin = 'round';
       analysisOverlayCtx.globalAlpha = tracker.id === activeTrackerId ? 1 : 0.62;
-      analysisOverlayCtx.beginPath();
-      points.forEach((point, index) => {
-        const x = point.x * width;
-        const y = point.y * height;
-        if (index === 0) analysisOverlayCtx.moveTo(x, y);
-        else analysisOverlayCtx.lineTo(x, y);
+      segments.forEach(segment => {
+        analysisOverlayCtx.strokeStyle = speedColorsEnabled
+          ? speedColor(segment.speed, minimumSpeed, maximumSpeed)
+          : tracker.color;
+        analysisOverlayCtx.beginPath();
+        analysisOverlayCtx.moveTo(segment.start.x * width, segment.start.y * height);
+        analysisOverlayCtx.lineTo(segment.end.x * width, segment.end.y * height);
+        analysisOverlayCtx.stroke();
       });
-      analysisOverlayCtx.stroke();
       points.forEach(point => {
         const x = point.x * width;
         const y = point.y * height;
+        analysisOverlayCtx.fillStyle = tracker.color;
         analysisOverlayCtx.beginPath();
         analysisOverlayCtx.arc(x, y, point.frame === current ? 7 : 4, 0, Math.PI * 2);
         analysisOverlayCtx.fill();
@@ -2013,6 +2256,7 @@
       });
       const last = points[points.length - 1];
       analysisOverlayCtx.font = '700 12px sans-serif';
+      analysisOverlayCtx.fillStyle = tracker.color;
       analysisOverlayCtx.fillText(tracker.name, last.x * width + 8, last.y * height - 8);
       analysisOverlayCtx.restore();
     });
@@ -2030,10 +2274,289 @@
       dot.className = 'tracker-dot';
       dot.style.background = tracker.color;
       const name = document.createElement('span');
-      name.textContent = `${tracker.name} (${Object.keys(tracker.points || {}).length})`;
+      name.textContent = `${tracker.name} (前${Object.keys(tracker.points || {}).length}／後${Object.keys(tracker.ownPoints || {}).length})`;
       button.append(dot, name);
       list.append(button);
     });
+  }
+
+  function drawSpacingSeries(context, segments, color, width, height, padding, maxFrame, maxSpeed) {
+    if (!segments.length) return;
+    context.save();
+    context.strokeStyle = color;
+    context.fillStyle = color;
+    context.lineWidth = 3;
+    context.lineJoin = 'round';
+    context.lineCap = 'round';
+    context.beginPath();
+    segments.forEach((segment, index) => {
+      const x = padding.left + (segment.frame / maxFrame) * (width - padding.left - padding.right);
+      const y = padding.top + (1 - segment.speed / maxSpeed) * (height - padding.top - padding.bottom);
+      if (index === 0) context.moveTo(x, y);
+      else context.lineTo(x, y);
+    });
+    context.stroke();
+    segments.forEach(segment => {
+      const x = padding.left + (segment.frame / maxFrame) * (width - padding.left - padding.right);
+      const y = padding.top + (1 - segment.speed / maxSpeed) * (height - padding.top - padding.bottom);
+      context.beginPath();
+      context.arc(x, y, 3.5, 0, Math.PI * 2);
+      context.fill();
+    });
+    context.restore();
+  }
+
+  function renderSpacingAnalysis() {
+    ensureTrackers();
+    const tracker = activeTracker();
+    const refSegments = motionSegments(tracker.points);
+    const ownSegments = motionSegments(tracker.ownPoints);
+    const currentSegments = analysisSource === 'own' ? ownSegments : refSegments;
+    const currentPoints = trackerPoints(tracker);
+    const speeds = currentSegments.map(segment => segment.speed);
+    const average = speeds.length ? speeds.reduce((sum, value) => sum + value, 0) / speeds.length : 0;
+    const maximum = speeds.length ? Math.max(...speeds) : 0;
+    const issues = spacingIssuesFor(currentSegments);
+
+    $('spacingPointCount').textContent = String(Object.keys(currentPoints).length);
+    $('spacingAverage').textContent = average.toFixed(2);
+    $('spacingMaximum').textContent = maximum.toFixed(2);
+    $('spacingIssueCount').textContent = String(issues.length);
+    $('speedColorToggle').textContent = `軌跡速度色 ${speedColorsEnabled ? 'ON' : 'OFF'}`;
+    $('speedColorToggle').classList.toggle('primary', speedColorsEnabled);
+    $('analysisRefSource').classList.toggle('active', analysisSource === 'ref');
+    $('analysisOwnSource').classList.toggle('active', analysisSource === 'own');
+    $('analysisSourceHint').textContent = analysisSource === 'own'
+      ? `修正後動画を分析中${compareOwnVideoName ? `：${compareOwnVideoName}` : ''}`
+      : `修正前動画を分析中${videoName ? `：${videoName}` : ''}`;
+
+    const issueList = $('spacingIssues');
+    issueList.replaceChildren();
+    if (!issues.length) {
+      const hint = document.createElement('span');
+      hint.className = 'compare-hint';
+      hint.textContent = currentSegments.length < 2 ? '3点以上置くと速度変化を検出します' : '大きな速度変化は見つかりません';
+      issueList.append(hint);
+    } else {
+      issues.forEach(issue => {
+        const button = document.createElement('button');
+        button.className = `spacing-issue ${issue.type}`;
+        button.dataset.frame = String(issue.frame);
+        button.textContent = `${issue.frame}F ${issue.label}`;
+        issueList.append(button);
+      });
+    }
+
+    sizeAnalysisCanvas(spacingChartCanvas, spacingChartCtx);
+    const width = spacingChartCanvas.clientWidth;
+    const height = spacingChartCanvas.clientHeight;
+    const padding = { left: 40, right: 16, top: 16, bottom: 30 };
+    const allSegments = [...refSegments, ...ownSegments];
+    spacingChartFrameMax = Math.max(
+      1,
+      Math.round((analysisVideo.duration || 0) * fps()),
+      ...allSegments.map(segment => segment.frame)
+    );
+    const maxSpeed = Math.max(0.1, ...allSegments.map(segment => segment.speed)) * 1.12;
+    spacingChartCtx.fillStyle = '#0c0f15';
+    spacingChartCtx.fillRect(0, 0, width, height);
+    spacingChartCtx.strokeStyle = '#303747';
+    spacingChartCtx.lineWidth = 1;
+    spacingChartCtx.font = '11px sans-serif';
+    spacingChartCtx.fillStyle = '#9ba4b7';
+    for (let row = 0; row <= 4; row += 1) {
+      const y = padding.top + (row / 4) * (height - padding.top - padding.bottom);
+      spacingChartCtx.beginPath();
+      spacingChartCtx.moveTo(padding.left, y);
+      spacingChartCtx.lineTo(width - padding.right, y);
+      spacingChartCtx.stroke();
+      spacingChartCtx.fillText((maxSpeed * (1 - row / 4)).toFixed(1), 4, y + 4);
+    }
+    drawSpacingSeries(spacingChartCtx, refSegments, '#ff4fa3', width, height, padding, spacingChartFrameMax, maxSpeed);
+    drawSpacingSeries(spacingChartCtx, ownSegments, '#64d2ff', width, height, padding, spacingChartFrameMax, maxSpeed);
+    const currentX = padding.left + (analysisFrame() / spacingChartFrameMax) * (width - padding.left - padding.right);
+    spacingChartCtx.strokeStyle = '#fff';
+    spacingChartCtx.lineWidth = 2;
+    spacingChartCtx.beginPath();
+    spacingChartCtx.moveTo(currentX, padding.top);
+    spacingChartCtx.lineTo(currentX, height - padding.bottom);
+    spacingChartCtx.stroke();
+    spacingChartCtx.fillStyle = '#9ba4b7';
+    spacingChartCtx.fillText('0F', padding.left - 4, height - 8);
+    spacingChartCtx.fillText(`${spacingChartFrameMax}F`, width - padding.right - 28, height - 8);
+  }
+
+  async function trackingFrameCanvas(frameNumber) {
+    const snapshot = await captureOnionFrame(frameNumber);
+    if (!snapshot) return null;
+    const stageWidth = Math.max(2, analysisOverlayCanvas.clientWidth);
+    const stageHeight = Math.max(2, analysisOverlayCanvas.clientHeight);
+    const scale = Math.min(1, 480 / stageWidth);
+    const output = document.createElement('canvas');
+    output.width = Math.max(2, Math.round(stageWidth * scale));
+    output.height = Math.max(2, Math.round(stageHeight * scale));
+    const context = output.getContext('2d', { willReadFrequently: true });
+    context.fillStyle = '#000';
+    context.fillRect(0, 0, output.width, output.height);
+    drawContained(context, snapshot, output.width, output.height);
+    return output;
+  }
+
+  function matchTrackingPoint(previousCanvas, nextCanvas, previousPoint) {
+    const previousContext = previousCanvas.getContext('2d', { willReadFrequently: true });
+    const nextContext = nextCanvas.getContext('2d', { willReadFrequently: true });
+    const previousPixels = previousContext.getImageData(0, 0, previousCanvas.width, previousCanvas.height).data;
+    const nextPixels = nextContext.getImageData(0, 0, nextCanvas.width, nextCanvas.height).data;
+    const centerX = Math.round(previousPoint.x * previousCanvas.width);
+    const centerY = Math.round(previousPoint.y * previousCanvas.height);
+    const patchRadius = 5;
+    const searchRadius = 18;
+    const sampleOffsets = [];
+    for (let y = -patchRadius; y <= patchRadius; y += 2) {
+      for (let x = -patchRadius; x <= patchRadius; x += 2) sampleOffsets.push({ x, y });
+    }
+    let best = { score: Infinity, x: centerX, y: centerY };
+    for (let offsetY = -searchRadius; offsetY <= searchRadius; offsetY += 1) {
+      for (let offsetX = -searchRadius; offsetX <= searchRadius; offsetX += 1) {
+        const candidateX = centerX + offsetX;
+        const candidateY = centerY + offsetY;
+        if (
+          candidateX < patchRadius || candidateY < patchRadius
+          || candidateX >= nextCanvas.width - patchRadius
+          || candidateY >= nextCanvas.height - patchRadius
+        ) continue;
+        let difference = 0;
+        for (const sample of sampleOffsets) {
+          const oldX = clamp(centerX + sample.x, 0, previousCanvas.width - 1);
+          const oldY = clamp(centerY + sample.y, 0, previousCanvas.height - 1);
+          const nextX = candidateX + sample.x;
+          const nextY = candidateY + sample.y;
+          const oldIndex = (oldY * previousCanvas.width + oldX) * 4;
+          const nextIndex = (nextY * nextCanvas.width + nextX) * 4;
+          difference += Math.abs(previousPixels[oldIndex] - nextPixels[nextIndex]);
+          difference += Math.abs(previousPixels[oldIndex + 1] - nextPixels[nextIndex + 1]);
+          difference += Math.abs(previousPixels[oldIndex + 2] - nextPixels[nextIndex + 2]);
+        }
+        const colorScore = difference / (sampleOffsets.length * 3 * 255);
+        const distancePenalty = (Math.hypot(offsetX, offsetY) / searchRadius) * 0.045;
+        const score = colorScore + distancePenalty;
+        if (score < best.score) best = { score, x: candidateX, y: candidateY };
+      }
+    }
+    return {
+      x: clamp(best.x / nextCanvas.width, 0, 1),
+      y: clamp(best.y / nextCanvas.height, 0, 1),
+      confidence: clamp(1 - best.score, 0, 1)
+    };
+  }
+
+  async function autoTrackFrames(direction) {
+    if (autoTracking) return;
+    const tracker = activeTracker();
+    const pointMap = trackerPoints(tracker);
+    const startFrame = analysisFrame();
+    const startPoint = pointMap[startFrame];
+    if (!startPoint) {
+      $('autoTrackStatus').textContent = '現在フレームへ軌跡ポイントを1つ置いてください';
+      return;
+    }
+    if (!analysisFrameLoader.src || analysisFrameLoader.readyState < 1) {
+      $('autoTrackStatus').textContent = '分析する動画を先に選んでください';
+      return;
+    }
+    autoTracking = true;
+    $('autoTrackBack').disabled = true;
+    $('autoTrackForward').disabled = true;
+    let tracked = 0;
+    let currentFrame = startFrame;
+    let currentPoint = { ...startPoint };
+    try {
+      for (let count = 0; count < 5; count += 1) {
+        const nextFrame = currentFrame + direction;
+        const total = Math.max(0, Math.floor((analysisFrameLoader.duration || 0) * fps()));
+        if (nextFrame < 0 || nextFrame > total) break;
+        $('autoTrackStatus').textContent = `${nextFrame}Fを追跡中…`;
+        const [previousCanvas, nextCanvas] = await Promise.all([
+          trackingFrameCanvas(currentFrame),
+          trackingFrameCanvas(nextFrame)
+        ]);
+        if (!previousCanvas || !nextCanvas) break;
+        const matched = matchTrackingPoint(previousCanvas, nextCanvas, currentPoint);
+        if (matched.confidence < 0.58) {
+          $('autoTrackStatus').textContent = `${nextFrame}Fで見失いました。手動で点を置き直してください`;
+          break;
+        }
+        pointMap[nextFrame] = { x: matched.x, y: matched.y };
+        currentFrame = nextFrame;
+        currentPoint = matched;
+        tracked += 1;
+      }
+      renderTrackerList();
+      renderAnalysisOverlay();
+      renderSpacingAnalysis();
+      renderCoachUi();
+      setAnalysisTime(currentFrame / fps(), false);
+      if (tracked) {
+        $('autoTrackStatus').textContent = `${tracked}フレーム追跡しました。ズレた点はタップで修正できます`;
+        queueAutosave();
+      } else if (!$('autoTrackStatus').textContent.includes('見失')) {
+        $('autoTrackStatus').textContent = '追跡できるフレームがありません';
+      }
+    } catch (error) {
+      console.error(error);
+      $('autoTrackStatus').textContent = '半自動追跡に失敗しました。手動ポイントをご利用ください';
+    } finally {
+      autoTracking = false;
+      $('autoTrackBack').disabled = false;
+      $('autoTrackForward').disabled = false;
+    }
+  }
+
+  async function saveSpacingSheet() {
+    const tracker = activeTracker();
+    const refSegments = motionSegments(tracker.points);
+    const ownSegments = motionSegments(tracker.ownPoints);
+    if (!refSegments.length && !ownSegments.length) {
+      $('autoTrackStatus').textContent = '軌跡ポイントを2点以上追加してください';
+      return;
+    }
+    renderSpacingAnalysis();
+    const output = document.createElement('canvas');
+    output.width = 1500;
+    output.height = 920;
+    const context = output.getContext('2d');
+    context.fillStyle = '#0b0d11';
+    context.fillRect(0, 0, output.width, output.height);
+    context.fillStyle = '#fff';
+    context.font = '800 44px sans-serif';
+    context.fillText(`${projectName}・タイミング／スペーシング分析`, 40, 58);
+    context.fillStyle = '#aeb6c8';
+    context.font = '700 24px sans-serif';
+    context.fillText(`軌跡：${tracker.name}　FPS：${fps()}`, 40, 102);
+    context.fillStyle = '#151821';
+    context.fillRect(40, 140, 1420, 610);
+    context.drawImage(spacingChartCanvas, 58, 158, 1384, 574);
+    context.fillStyle = '#ff4fa3';
+    context.fillRect(48, 785, 28, 6);
+    context.fillStyle = '#fff';
+    context.font = '700 22px sans-serif';
+    context.fillText(`修正前：${refSegments.length}区間`, 88, 796);
+    context.fillStyle = '#64d2ff';
+    context.fillRect(330, 785, 28, 6);
+    context.fillStyle = '#fff';
+    context.fillText(`修正後：${ownSegments.length}区間`, 370, 796);
+    const refIssues = spacingIssuesFor(refSegments);
+    const ownIssues = spacingIssuesFor(ownSegments);
+    context.fillStyle = '#aeb6c8';
+    context.font = '600 20px sans-serif';
+    const issueText = [
+      ...refIssues.map(issue => `前 ${issue.frame}F ${issue.label}`),
+      ...ownIssues.map(issue => `後 ${issue.frame}F ${issue.label}`)
+    ].slice(0, 8).join(' ／ ');
+    context.fillText(issueText || '大きな速度変化は見つかりません', 48, 850);
+    output.toBlob(blob => {
+      if (blob) downloadBlob(blob, `${safeFilename(projectName)}_spacing-analysis.png`);
+    }, 'image/png');
   }
 
   function phaseTotalFrames() {
@@ -2113,7 +2636,7 @@
       seek.textContent = `${pose.frame}F`;
       const note = document.createElement('div');
       note.className = 'pose-note';
-      note.textContent = pose.note || '重要ポーズ';
+      note.textContent = `${pose.source === 'own' ? '修正後' : '修正前'}・${pose.note || '重要ポーズ'}`;
       const actions = document.createElement('div');
       actions.className = 'marker-actions';
       const edit = document.createElement('button');
@@ -2156,6 +2679,7 @@
     renderGuideCanvas();
     renderAnalysisOverlay();
     renderOnionSkin();
+    renderSpacingAnalysis();
   }
 
   function updateAnalysisHud() {
@@ -2176,6 +2700,7 @@
     updateAnalysisHud();
     renderAnalysisOverlay();
     renderOnionSkin();
+    renderSpacingAnalysis();
     if (autosave) queueAutosave(900);
   }
 
@@ -2223,7 +2748,7 @@
       return;
     }
     const current = analysisFrame();
-    const existing = keyPoses.find(pose => pose.frame === current);
+    const existing = keyPoses.find(pose => pose.frame === current && (pose.source || 'ref') === analysisSource);
     const note = prompt('このポーズのメモ（空欄でもOK）', existing?.note || '');
     if (note === null) return;
     if (existing) {
@@ -2233,12 +2758,14 @@
       keyPoses.push({
         id: uid(),
         frame: current,
+        source: analysisSource,
         note: note.trim().slice(0, 120),
         thumbnail
       });
     }
     renderKeyPoses();
     renderPhaseBar();
+    renderCoachUi();
     queueAutosave();
   }
 
@@ -2272,7 +2799,7 @@
     ].filter(([, value]) => value !== null).map(([label, value]) => `${label} ${value}F`).join(' ／ ');
     context.fillText(phaseText || '動作区間：未設定', 34, 98);
     const trackerText = trackers
-      .map(tracker => `${tracker.name} ${Object.keys(tracker.points || {}).length}点`)
+      .map(tracker => `${tracker.name} 前${Object.keys(tracker.points || {}).length}点／後${Object.keys(tracker.ownPoints || {}).length}点`)
       .join(' ／ ');
     context.fillText(trackerText || '軌跡：未設定', 34, 136);
 
@@ -2296,6 +2823,679 @@
     output.toBlob(blob => {
       if (blob) downloadBlob(blob, `${safeFilename(projectName)}_analysis-sheet.png`);
     }, 'image/png');
+  }
+
+  const reviewFrame = () => Math.max(0, Math.round(reviewCurrentTime * fps()));
+  const memoVideoFrame = () => Math.max(0, Math.round((memoVideo.currentTime || 0) * fps()));
+
+  function updateReviewHud() {
+    $('reviewFrameHud').textContent = `F ${reviewFrame()}`;
+    $('reviewTimeHud').textContent = fmtTime(reviewCurrentTime);
+    $('reviewScrub').value = reviewVideo.duration
+      ? String(Math.round((reviewCurrentTime / reviewVideo.duration) * 1000))
+      : '0';
+  }
+
+  function setReviewTime(time, autosave = true) {
+    const max = reviewVideo.duration
+      ? Math.max(0, reviewVideo.duration - 0.001)
+      : Math.max(0, Number(time) || 0);
+    reviewCurrentTime = clamp(Number(time) || 0, 0, max);
+    if (reviewVideo.src && reviewVideo.readyState >= 1) reviewVideo.currentTime = reviewCurrentTime;
+    updateReviewHud();
+    if (autosave) queueAutosave(900);
+  }
+
+  function pauseReview(autosave = true) {
+    reviewPlaying = false;
+    reviewVideo.pause();
+    $('reviewPlay').textContent = '▶︎';
+    if (autosave) queueAutosave(300);
+  }
+
+  function reviewLoop() {
+    if (reviewPlaying) {
+      reviewCurrentTime = reviewVideo.currentTime || 0;
+      updateReviewHud();
+      if (reviewVideo.ended) pauseReview();
+    }
+    requestAnimationFrame(reviewLoop);
+  }
+
+  function reviewStatusLabel(statusValue) {
+    return statusValue === 'done' ? '完了' : statusValue === 'progress' ? '修正中' : '未修正';
+  }
+
+  function filteredReviewItems() {
+    return [...reviewItems]
+      .filter(item => {
+        const statusMatch = reviewStatusFilter === 'all'
+          || (reviewStatusFilter === 'open' && item.status !== 'done')
+          || item.status === reviewStatusFilter;
+        const tagMatch = reviewTagFilter === 'all' || item.tag === reviewTagFilter;
+        return statusMatch && tagMatch;
+      })
+      .sort((a, b) => a.frame - b.frame || a.createdAt - b.createdAt);
+  }
+
+  function renderReviewList() {
+    const list = $('reviewList');
+    list.replaceChildren();
+    const items = filteredReviewItems();
+    if (!items.length) {
+      const emptyItem = document.createElement('div');
+      emptyItem.className = 'status';
+      emptyItem.textContent = reviewItems.length ? '条件に合う修正項目はありません' : '修正項目はまだありません';
+      list.append(emptyItem);
+      return;
+    }
+    items.forEach(item => {
+      const row = document.createElement('div');
+      row.className = `review-item${item.status === 'done' ? ' done' : ''}`;
+      row.dataset.id = item.id;
+      const seek = document.createElement('button');
+      seek.className = 'frame-chip';
+      seek.dataset.action = 'seek';
+      seek.textContent = `${item.frame}F`;
+      const tag = document.createElement('span');
+      tag.className = 'review-tag';
+      tag.textContent = item.tag;
+      const note = document.createElement('div');
+      note.className = 'review-note';
+      note.textContent = item.note || '確認';
+      const select = document.createElement('select');
+      select.className = 'review-status';
+      select.dataset.action = 'status';
+      [
+        ['todo', '未修正'],
+        ['progress', '修正中'],
+        ['done', '完了']
+      ].forEach(([value, label]) => {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        select.append(option);
+      });
+      select.value = item.status;
+      const actions = document.createElement('div');
+      actions.className = 'marker-actions';
+      const edit = document.createElement('button');
+      edit.className = 'layer-mini';
+      edit.dataset.action = 'edit';
+      edit.textContent = '✎';
+      const remove = document.createElement('button');
+      remove.className = 'layer-mini delete';
+      remove.dataset.action = 'delete';
+      remove.textContent = '×';
+      actions.append(edit, remove);
+      row.append(seek, tag, note, select, actions);
+      list.append(row);
+    });
+  }
+
+  const coachCheckLabels = {
+    poses: '① 重要ポーズ',
+    balance: '② 重心・シルエット',
+    contact: '③ 足接地',
+    spacing: '④ 軌跡・スペーシング',
+    issues: '⑤ 問題修正',
+    compare: '⑥ 修正前後比較'
+  };
+
+  const coachTaskLabels = {
+    walk: '歩き',
+    run: '走り',
+    attack: '攻撃・アクション',
+    idle: '待機・演技',
+    creature: 'クリーチャー',
+    other: 'その他'
+  };
+
+  const coachTaskGuides = {
+    walk: '接地 → 沈み込み → すれ違い → 上昇の順で重要ポーズを確認。足の接地位置と腰の上下動を先に整えると、歩幅と重心移動を判断しやすくなります。',
+    run: '接地 → 沈み込み → 蹴り出し → 飛行の順で確認。接地の短さ、腰の落下量、手足の前後差を見てからスペーシングを整えます。',
+    attack: '予備動作 → 本動作 → フォロースルーのシルエットを先に決め、重心の移動方向と武器・手先の軌跡が同じ意図を示しているか確認します。',
+    idle: '最初に読みやすいシルエットを作り、呼吸・視線・重心移動の周期を確認。全身が同時に切り返さないよう時間差を付けます。',
+    creature: '支持脚と接地点を確定してから、骨盤・背骨・肩帯の順に力が伝わるか確認。部位ごとの軌跡と位相差を比較します。',
+    other: '重要ポーズ、重心、接地、軌跡の順で大きな問題から確認し、最後に修正前後を同じフレームで比較します。'
+  };
+
+  function coachStepStates() {
+    const trackerReady = trackers.some(tracker => (
+      Object.keys(tracker.points || {}).length >= 3
+      || Object.keys(tracker.ownPoints || {}).length >= 3
+    ));
+    const allIssuesDone = reviewItems.length > 0 && reviewItems.every(item => item.status === 'done');
+    return {
+      poses: coachChecks.poses || keyPoses.length >= 3,
+      balance: coachChecks.balance,
+      contact: coachChecks.contact,
+      spacing: coachChecks.spacing || trackerReady,
+      issues: coachChecks.issues || allIssuesDone,
+      compare: coachChecks.compare
+    };
+  }
+
+  function renderCoachUi() {
+    const states = coachStepStates();
+    const completed = Object.values(states).filter(Boolean).length;
+    $('coachTaskType').value = coachTaskType;
+    document.querySelectorAll('[data-coach-check]').forEach(button => {
+      const key = button.dataset.coachCheck;
+      const done = Boolean(states[key]);
+      button.classList.toggle('done', done);
+      button.setAttribute('aria-pressed', String(done));
+      button.textContent = `${done ? '✓ ' : ''}${coachCheckLabels[key]}`;
+    });
+    $('coachProgressLabel').textContent = `${completed} / 6`;
+    $('coachProgressBar').style.width = `${(completed / 6) * 100}%`;
+    $('coachGuide').textContent = coachTaskGuides[coachTaskType] || coachTaskGuides.other;
+    $('markCompareDone').textContent = states.compare ? '比較確認済み ✓' : '比較確認済み';
+    $('markCompareDone').classList.toggle('primary', states.compare);
+
+    let message = '';
+    if (!objectUrl) {
+      message = '① 動画ページで修正前の動画を選びましょう';
+    } else if (!compareOwnObjectUrl) {
+      message = '② 比較ページで修正後の動画を選びましょう';
+    } else {
+      const nextKey = Object.keys(coachCheckLabels).find(key => !states[key]);
+      message = nextKey
+        ? `次の確認：${coachCheckLabels[nextKey]}`
+        : `全チェック完了！${coachReportCreated ? '最終レポートも保存済みです' : '最終レポートを保存しましょう'}`;
+    }
+    $('coachStatus').textContent = message;
+  }
+
+  function renderVersionList() {
+    const list = $('versionList');
+    list.replaceChildren();
+    const previewVersion = motionVersions.find(version => version.id === motionVersionPreviewId);
+    if (previewVersion) {
+      const previewRow = document.createElement('div');
+      previewRow.className = 'version-item';
+      const info = document.createElement('div');
+      const name = document.createElement('div');
+      name.className = 'version-name';
+      name.textContent = `表示中：${previewVersion.label}`;
+      const meta = document.createElement('div');
+      meta.className = 'version-meta';
+      meta.textContent = '比較ページは保存版を表示中です';
+      info.append(name, meta);
+      const back = document.createElement('button');
+      back.className = 'layer-mini';
+      back.dataset.action = 'latest';
+      back.textContent = '現在版へ戻す';
+      previewRow.append(info, back);
+      list.append(previewRow);
+    }
+    if (!motionVersions.length) {
+      const emptyItem = document.createElement('div');
+      emptyItem.className = 'status';
+      emptyItem.textContent = '保存した修正動画はまだありません';
+      list.append(emptyItem);
+      return;
+    }
+    [...motionVersions]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .forEach(version => {
+        const row = document.createElement('div');
+        row.className = 'version-item';
+        row.dataset.id = version.id;
+        const info = document.createElement('div');
+        const name = document.createElement('div');
+        name.className = 'version-name';
+        name.textContent = version.label;
+        const meta = document.createElement('div');
+        meta.className = 'version-meta';
+        meta.textContent = `${new Date(version.createdAt).toLocaleString('ja-JP')} ／ ${version.name || '修正後動画'}`;
+        info.append(name, meta);
+        const actions = document.createElement('div');
+        actions.className = 'marker-actions';
+        const open = document.createElement('button');
+        open.className = 'layer-mini';
+        open.dataset.action = 'compare';
+        open.textContent = '比較';
+        const remove = document.createElement('button');
+        remove.className = 'layer-mini delete';
+        remove.dataset.action = 'delete';
+        remove.textContent = '×';
+        actions.append(open, remove);
+        row.append(info, actions);
+        list.append(row);
+      });
+  }
+
+  function renderReviewUi() {
+    $('reviewStatusFilter').value = reviewStatusFilter;
+    $('reviewTagFilter').value = reviewTagFilter;
+    $('reviewTotalCount').textContent = String(reviewItems.length);
+    $('reviewTodoCount').textContent = String(reviewItems.filter(item => item.status === 'todo').length);
+    $('reviewProgressCount').textContent = String(reviewItems.filter(item => item.status === 'progress').length);
+    $('reviewDoneCount').textContent = String(reviewItems.filter(item => item.status === 'done').length);
+    updateReviewHud();
+    renderReviewList();
+    renderCoachUi();
+    renderVersionList();
+  }
+
+  function startFocusReview() {
+    const openItems = reviewItems
+      .filter(item => item.status !== 'done')
+      .sort((a, b) => a.frame - b.frame || a.createdAt - b.createdAt);
+    if (!openItems.length) {
+      $('coachStatus').textContent = reviewItems.length
+        ? '未修正の項目はありません。比較確認へ進みましょう'
+        : '先に現在フレームへ修正項目を追加してください';
+      return;
+    }
+    reviewStatusFilter = 'open';
+    pauseReview(false);
+    setReviewTime(openItems[0].frame / fps());
+    renderReviewUi();
+    $('coachStatus').textContent = `未完了 ${openItems.length}件をフレーム順に確認します`;
+    queueAutosave();
+  }
+
+  async function saveMotionVersion() {
+    ensureProjectId();
+    if (motionVersionPreviewId) {
+      $('coachStatus').textContent = '保存版を表示中です。「現在版へ戻す」後に新しい版を保存してください';
+      return;
+    }
+    try {
+      const videoRecord = await storeGet(VIDEO_STORE, projectId);
+      if (!videoRecord?.compareBlob) {
+        $('coachStatus').textContent = '比較ページで修正後動画を選んでから版保存してください';
+        return;
+      }
+      const defaultLabel = `修正版 ${motionVersions.length + 1}`;
+      const input = prompt('この修正版の名前', defaultLabel);
+      if (input === null) return;
+      const label = input.trim().slice(0, 60) || defaultLabel;
+      const id = uid();
+      const createdAt = Date.now();
+      const versionRecord = {
+        id,
+        label,
+        name: videoRecord.compareName || compareOwnVideoName || '修正後動画',
+        type: videoRecord.compareType || videoRecord.compareBlob.type || '',
+        size: videoRecord.compareSize || videoRecord.compareBlob.size || 0,
+        createdAt,
+        blob: videoRecord.compareBlob
+      };
+      const storedVersions = Array.isArray(videoRecord.versions) ? videoRecord.versions : [];
+      const nextStoredVersions = [versionRecord, ...storedVersions].slice(0, 8);
+      await storePut(VIDEO_STORE, {
+        ...videoRecord,
+        versions: nextStoredVersions
+      });
+      motionVersions = nextStoredVersions.map(version => ({
+        id: version.id,
+        label: version.label,
+        name: version.name,
+        createdAt: version.createdAt
+      }));
+      await saveProjectNow();
+      renderVersionList();
+      $('coachStatus').textContent = `「${label}」を保存しました（最大8件）`;
+    } catch (error) {
+      console.error(error);
+      $('coachStatus').textContent = '修正版を保存できませんでした。端末の空き容量を確認してください';
+    }
+  }
+
+  async function openMotionVersion(id) {
+    try {
+      const videoRecord = await storeGet(VIDEO_STORE, projectId);
+      const version = (videoRecord?.versions || []).find(item => item.id === id);
+      if (!version?.blob) {
+        $('coachStatus').textContent = 'この修正版の動画データが見つかりません';
+        return;
+      }
+      await loadCompareOwnBlob(version.blob, version.label || version.name, { versionId: version.id });
+      setCompareTime(reviewCurrentTime, false);
+      document.querySelector('[data-tab="comparePanel"]').click();
+      renderCompareUi();
+    } catch (error) {
+      console.error(error);
+      $('coachStatus').textContent = '保存した修正版を開けませんでした';
+    }
+  }
+
+  async function deleteMotionVersion(id) {
+    const metadata = motionVersions.find(version => version.id === id);
+    if (!metadata || !confirm(`「${metadata.label}」を履歴から削除しますか？`)) return;
+    try {
+      const videoRecord = await storeGet(VIDEO_STORE, projectId);
+      const nextStoredVersions = (videoRecord?.versions || []).filter(version => version.id !== id);
+      if (videoRecord) {
+        await storePut(VIDEO_STORE, {
+          ...videoRecord,
+          versions: nextStoredVersions
+        });
+      }
+      motionVersions = motionVersions.filter(version => version.id !== id);
+      await saveProjectNow();
+      if (motionVersionPreviewId === id) await restoreLatestCompareVideo();
+      renderVersionList();
+      $('coachStatus').textContent = `「${metadata.label}」を削除しました`;
+    } catch (error) {
+      console.error(error);
+      $('coachStatus').textContent = '修正版を削除できませんでした';
+    }
+  }
+
+  async function restoreLatestCompareVideo() {
+    try {
+      const videoRecord = await storeGet(VIDEO_STORE, projectId);
+      if (!videoRecord?.compareBlob) {
+        clearCompareOwnSource();
+        $('coachStatus').textContent = '現在の修正動画が見つかりません';
+        return;
+      }
+      await loadCompareOwnBlob(videoRecord.compareBlob, videoRecord.compareName || compareOwnVideoName);
+      setCompareTime(reviewCurrentTime, false);
+      renderCompareUi();
+      renderVersionList();
+      $('coachStatus').textContent = '現在の修正動画へ戻しました';
+    } catch (error) {
+      console.error(error);
+      $('coachStatus').textContent = '現在の修正動画へ戻せませんでした';
+    }
+  }
+
+  function drawCoachSpacingChart(context, x, y, width, height) {
+    const tracker = activeTracker();
+    const refSegments = motionSegments(tracker.points);
+    const ownSegments = motionSegments(tracker.ownPoints);
+    const allSegments = [...refSegments, ...ownSegments];
+    const maxFrame = Math.max(1, ...allSegments.map(segment => segment.frame));
+    const maxSpeed = Math.max(0.01, ...allSegments.map(segment => segment.speed));
+    const padding = { left: 58, right: 24, top: 32, bottom: 44 };
+    context.save();
+    context.translate(x, y);
+    context.fillStyle = '#11151d';
+    context.fillRect(0, 0, width, height);
+    context.strokeStyle = '#343b4a';
+    context.lineWidth = 1;
+    for (let index = 0; index <= 4; index += 1) {
+      const gridY = padding.top + ((height - padding.top - padding.bottom) * index) / 4;
+      context.beginPath();
+      context.moveTo(padding.left, gridY);
+      context.lineTo(width - padding.right, gridY);
+      context.stroke();
+    }
+    context.fillStyle = '#aeb6c8';
+    context.font = '600 17px sans-serif';
+    context.fillText('移動量', 8, 22);
+    context.fillText('フレーム', width - 92, height - 12);
+    if (!allSegments.length) {
+      context.font = '700 22px sans-serif';
+      context.fillText('軌跡ポイントを3点以上置くとグラフが表示されます', 90, height / 2);
+    } else {
+      drawSpacingSeries(context, refSegments, '#ff4fa3', width, height, padding, maxFrame, maxSpeed);
+      drawSpacingSeries(context, ownSegments, '#64d2ff', width, height, padding, maxFrame, maxSpeed);
+    }
+    context.restore();
+  }
+
+  function wrapCanvasText(context, text, x, y, maxWidth, lineHeight, maxLines = 2) {
+    const source = String(text || '');
+    let line = '';
+    let lineIndex = 0;
+    for (const character of source) {
+      const next = line + character;
+      if (context.measureText(next).width > maxWidth && line) {
+        context.fillText(line, x, y + lineIndex * lineHeight);
+        lineIndex += 1;
+        line = character;
+        if (lineIndex >= maxLines) return;
+      } else {
+        line = next;
+      }
+    }
+    if (line && lineIndex < maxLines) context.fillText(line, x, y + lineIndex * lineHeight);
+  }
+
+  async function saveCoachReport() {
+    const states = coachStepStates();
+    const completed = Object.values(states).filter(Boolean).length;
+    const output = document.createElement('canvas');
+    output.width = 1600;
+    output.height = 1320;
+    const context = output.getContext('2d');
+    context.fillStyle = '#0b0d11';
+    context.fillRect(0, 0, output.width, output.height);
+
+    context.fillStyle = '#fff';
+    context.font = '800 50px sans-serif';
+    context.fillText(`${projectName}・コーチレポート`, 44, 68);
+    context.fillStyle = '#aeb6c8';
+    context.font = '700 24px sans-serif';
+    context.fillText(`課題：${coachTaskLabels[coachTaskType] || coachTaskLabels.other}　FPS：${fps()}　作成：${new Date().toLocaleString('ja-JP')}`, 44, 112);
+
+    context.fillStyle = '#1c2230';
+    context.fillRect(44, 146, 1512, 22);
+    const gradient = context.createLinearGradient(44, 0, 1556, 0);
+    gradient.addColorStop(0, '#4deBff');
+    gradient.addColorStop(0.5, '#8b7cff');
+    gradient.addColorStop(1, '#ff4fa3');
+    context.fillStyle = gradient;
+    context.fillRect(44, 146, 1512 * (completed / 6), 22);
+    context.fillStyle = '#fff';
+    context.font = '800 25px sans-serif';
+    context.fillText(`添削進捗 ${completed} / 6`, 44, 207);
+
+    Object.entries(coachCheckLabels).forEach(([key, label], index) => {
+      const column = index % 3;
+      const row = Math.floor(index / 3);
+      const x = 44 + column * 504;
+      const y = 247 + row * 72;
+      context.fillStyle = states[key] ? '#30d15820' : '#171b24';
+      context.fillRect(x, y, 478, 54);
+      context.fillStyle = states[key] ? '#30d158' : '#aeb6c8';
+      context.font = '750 22px sans-serif';
+      context.fillText(`${states[key] ? '✓' : '○'} ${label}`, x + 16, y + 35);
+    });
+
+    context.fillStyle = '#fff';
+    context.font = '800 30px sans-serif';
+    context.fillText('タイミング／スペーシング', 44, 450);
+    drawCoachSpacingChart(context, 44, 474, 1512, 350);
+    context.fillStyle = '#ff4fa3';
+    context.fillRect(60, 842, 28, 6);
+    context.fillStyle = '#fff';
+    context.font = '700 19px sans-serif';
+    context.fillText('修正前', 100, 851);
+    context.fillStyle = '#64d2ff';
+    context.fillRect(210, 842, 28, 6);
+    context.fillStyle = '#fff';
+    context.fillText('修正後', 250, 851);
+
+    context.fillStyle = '#fff';
+    context.font = '800 30px sans-serif';
+    context.fillText('重要ポーズ', 44, 906);
+    const poses = [...keyPoses].sort((a, b) => a.frame - b.frame).slice(0, 3);
+    const poseImages = await Promise.all(poses.map(pose => getImage(pose.thumbnail)));
+    for (let index = 0; index < 3; index += 1) {
+      const x = 44 + index * 504;
+      context.fillStyle = '#11151d';
+      context.fillRect(x, 930, 478, 270);
+      const pose = poses[index];
+      const image = poseImages[index];
+      if (pose && image) {
+        context.drawImage(image, x, 930, 478, 270);
+        context.fillStyle = '#000b';
+        context.fillRect(x, 1148, 478, 52);
+        context.fillStyle = '#fff';
+        context.font = '750 19px sans-serif';
+        context.fillText(`${pose.frame}F ${pose.source === 'own' ? '修正後' : '修正前'}`, x + 12, 1177);
+        context.font = '600 16px sans-serif';
+        wrapCanvasText(context, pose.note || '', x + 132, 1177, 330, 20, 1);
+      } else {
+        context.fillStyle = '#7d879b';
+        context.font = '700 21px sans-serif';
+        context.fillText('未登録', x + 198, 1070);
+      }
+    }
+
+    const todo = reviewItems.filter(item => item.status === 'todo').length;
+    const progress = reviewItems.filter(item => item.status === 'progress').length;
+    const done = reviewItems.filter(item => item.status === 'done').length;
+    context.fillStyle = '#aeb6c8';
+    context.font = '700 22px sans-serif';
+    context.fillText(`修正項目：全${reviewItems.length}件　未修正 ${todo}　修正中 ${progress}　完了 ${done}　／　保存版 ${motionVersions.length}件`, 44, 1260);
+    context.fillText(`修正前：${videoName || '未設定'}　／　修正後：${compareOwnVideoName || '未設定'}`, 44, 1296);
+
+    const blob = await new Promise(resolve => output.toBlob(resolve, 'image/png'));
+    if (!blob) {
+      $('coachStatus').textContent = '最終レポートを作成できませんでした';
+      return;
+    }
+    downloadBlob(blob, `${safeFilename(projectName)}_coach-report.png`);
+    coachReportCreated = true;
+    await saveProjectNow();
+    renderCoachUi();
+    $('coachStatus').textContent = `コーチレポートを保存しました（進捗 ${completed}/6）`;
+  }
+
+  const TUTORIAL_KEY = 'animation-coach-v1-tutorial-seen';
+  const tutorialSlides = [
+    {
+      icon: '🎬',
+      title: 'Animation Coach v1.0',
+      text: '修正前と修正後の動画を読み込み、重要ポーズ・重心・接地・スペーシングを順番に確認できます。'
+    },
+    {
+      icon: '🧭',
+      title: '迷ったらコーチタブ',
+      text: '6項目のチェックリストが次に見る場所を案内します。重要ポーズと軌跡は、登録数に応じて自動で完了になります。'
+    },
+    {
+      icon: '🏁',
+      title: '修正の変化を残す',
+      text: '修正後動画を最大8版まで保存し、最後に進捗・ポーズ・スペーシングを1枚のレポートへ書き出せます。'
+    }
+  ];
+
+  function renderTutorial() {
+    const slide = tutorialSlides[tutorialStep] || tutorialSlides[0];
+    $('tutorialIcon').textContent = slide.icon;
+    $('tutorialTitle').textContent = slide.title;
+    $('tutorialText').textContent = slide.text;
+    $('tutorialNext').textContent = tutorialStep === tutorialSlides.length - 1 ? '始める' : '次へ';
+    const dots = $('tutorialDots');
+    dots.replaceChildren();
+    tutorialSlides.forEach((_, index) => {
+      const dot = document.createElement('span');
+      dot.className = `tutorial-dot${index === tutorialStep ? ' active' : ''}`;
+      dots.append(dot);
+    });
+  }
+
+  function showTutorial(force = false) {
+    if (!force && localStorage.getItem(TUTORIAL_KEY) === '1') return;
+    tutorialStep = 0;
+    renderTutorial();
+    $('tutorialOverlay').classList.remove('hidden');
+  }
+
+  function closeTutorial() {
+    $('tutorialOverlay').classList.add('hidden');
+    localStorage.setItem(TUTORIAL_KEY, '1');
+  }
+
+  function jumpReviewIssue(direction) {
+    const frames = [...new Set(
+      reviewItems
+        .filter(item => item.status !== 'done')
+        .map(item => item.frame)
+        .sort((a, b) => a - b)
+    )];
+    if (!frames.length) return;
+    const current = reviewFrame();
+    let target;
+    if (direction > 0) target = frames.find(value => value > current) ?? frames[0];
+    else target = [...frames].reverse().find(value => value < current) ?? frames[frames.length - 1];
+    pauseReview(false);
+    setReviewTime(target / fps());
+  }
+
+  async function saveReviewSheet() {
+    if (!reviewItems.length) {
+      $('reviewList').textContent = '修正項目を1つ以上追加してください';
+      return;
+    }
+    const items = [...reviewItems].sort((a, b) => a.frame - b.frame || a.createdAt - b.createdAt);
+    const rowHeight = 74;
+    const output = document.createElement('canvas');
+    output.width = 1500;
+    output.height = 220 + items.length * rowHeight + 35;
+    const context = output.getContext('2d');
+    context.fillStyle = '#0b0d11';
+    context.fillRect(0, 0, output.width, output.height);
+    context.fillStyle = '#fff';
+    context.font = '800 44px sans-serif';
+    context.fillText(`${projectName}・修正レビュー`, 36, 58);
+    const todo = items.filter(item => item.status === 'todo').length;
+    const progress = items.filter(item => item.status === 'progress').length;
+    const done = items.filter(item => item.status === 'done').length;
+    context.fillStyle = '#aeb6c8';
+    context.font = '700 25px sans-serif';
+    context.fillText(`全${items.length}件 ／ 未修正 ${todo} ／ 修正中 ${progress} ／ 完了 ${done}`, 36, 105);
+    context.fillText(`修正前：${videoName || '未設定'} ／ 修正後：${compareOwnVideoName || '未設定'}`, 36, 145);
+    context.fillStyle = '#252a36';
+    context.fillRect(28, 174, output.width - 56, 42);
+    context.fillStyle = '#fff';
+    context.font = '800 21px sans-serif';
+    context.fillText('フレーム', 48, 202);
+    context.fillText('タグ', 190, 202);
+    context.fillText('進捗', 390, 202);
+    context.fillText('修正内容', 610, 202);
+    items.forEach((item, index) => {
+      const y = 220 + index * rowHeight;
+      context.fillStyle = index % 2 ? '#12151c' : '#171b24';
+      context.fillRect(28, y, output.width - 56, rowHeight - 2);
+      context.fillStyle = '#ff4fa3';
+      context.font = '800 24px sans-serif';
+      context.fillText(`${item.frame}F`, 48, y + 44);
+      context.fillStyle = '#fff';
+      context.fillText(item.tag, 190, y + 44);
+      context.fillStyle = item.status === 'done' ? '#30d158' : item.status === 'progress' ? '#ffd60a' : '#ff6b6b';
+      context.fillText(reviewStatusLabel(item.status), 390, y + 44);
+      context.fillStyle = '#fff';
+      context.font = '600 21px sans-serif';
+      context.fillText((item.note || '確認').slice(0, 62), 610, y + 44);
+    });
+    output.toBlob(blob => {
+      if (blob) downloadBlob(blob, `${safeFilename(projectName)}_review-sheet.png`);
+    }, 'image/png');
+  }
+
+  function updateMemoVideoHud() {
+    const currentTime = memoVideo.currentTime || 0;
+    $('memoVideoFrameHud').textContent = `F ${memoVideoFrame()}`;
+    $('memoVideoTimeHud').textContent = fmtTime(currentTime);
+    $('memoFrameLabel').textContent = `${memoVideoFrame()}F`;
+    $('memoVideoScrub').value = memoVideo.duration
+      ? String(Math.round((currentTime / memoVideo.duration) * 1000))
+      : '0';
+  }
+
+  function setMemoVideoTime(time, syncMain = true) {
+    const max = memoVideo.duration
+      ? Math.max(0, memoVideo.duration - 0.001)
+      : Math.max(0, Number(time) || 0);
+    const target = clamp(Number(time) || 0, 0, max);
+    if (memoVideo.src && memoVideo.readyState >= 1) memoVideo.currentTime = target;
+    if (syncMain && video.src && video.readyState >= 1) video.currentTime = target;
+    updateMemoVideoHud();
+  }
+
+  function memoVideoLoop() {
+    if (!memoVideo.paused) updateMemoVideoHud();
+    requestAnimationFrame(memoVideoLoop);
   }
 
   function renderMemos() {
@@ -2503,6 +3703,11 @@
     button.addEventListener('click', () => {
       if (button.dataset.tab !== 'comparePanel' && comparePlaying) pauseComparison();
       if (button.dataset.tab !== 'analysisPanel' && analysisPlaying) pauseAnalysis();
+      if (button.dataset.tab !== 'reviewPanel' && reviewPlaying) pauseReview();
+      if (button.dataset.tab !== 'memoPanel' && !memoVideo.paused) {
+        memoVideo.pause();
+        if (video.src) video.currentTime = memoVideo.currentTime || 0;
+      }
       document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab === button));
       document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('active', panel.id === button.dataset.tab));
       if (button.dataset.tab === 'videoPanel') {
@@ -2513,13 +3718,23 @@
       } else if (button.dataset.tab === 'analysisPanel') {
         video.pause();
         pauseComparison(false);
+        pauseReview(false);
         requestAnimationFrame(() => {
           resizeAnalysisCanvases();
           setAnalysisTime(analysisCurrentTime, false);
           renderAnalysisUi();
         });
+      } else if (button.dataset.tab === 'reviewPanel') {
+        video.pause();
+        pauseComparison(false);
+        pauseAnalysis(false);
+        setReviewTime(reviewCurrentTime, false);
+        renderReviewUi();
       } else if (button.dataset.tab === 'memoPanel') {
-        $('memoFrameLabel').textContent = `${frame()}F`;
+        video.pause();
+        pauseReview(false);
+        setMemoVideoTime(video.currentTime || 0, false);
+        updateMemoVideoHud();
       } else if (button.dataset.tab === 'exportPanel') {
         renderProjectList();
       }
@@ -2586,6 +3801,7 @@
       compareOwnVideoName = selected.name;
       setCompareTime(compareCurrentTime, false);
       await saveProjectNow({ refreshList: true });
+      renderCoachUi();
     } catch (error) {
       console.error(error);
       $('markerList').textContent = '自分の動画を読み込めませんでした';
@@ -2777,6 +3993,7 @@
     updateAnalysisHud();
     renderAnalysisOverlay();
     renderOnionSkin();
+    renderSpacingAnalysis();
   });
   analysisVideo.addEventListener('play', () => {
     analysisPlaying = true;
@@ -2839,6 +4056,37 @@
     queueAutosave();
   });
 
+  $('analysisRefSource').addEventListener('click', () => applyAnalysisSource('ref'));
+  $('analysisOwnSource').addEventListener('click', () => applyAnalysisSource('own'));
+  $('speedColorToggle').addEventListener('click', () => {
+    speedColorsEnabled = !speedColorsEnabled;
+    renderAnalysisOverlay();
+    renderSpacingAnalysis();
+    queueAutosave();
+  });
+  $('autoTrackBack').addEventListener('click', () => autoTrackFrames(-1));
+  $('autoTrackForward').addEventListener('click', () => autoTrackFrames(1));
+  $('saveSpacingSheet').addEventListener('click', saveSpacingSheet);
+  $('spacingIssues').addEventListener('click', event => {
+    const button = event.target.closest('.spacing-issue');
+    if (!button) return;
+    pauseAnalysis(false);
+    setAnalysisTime(Number(button.dataset.frame) / fps());
+  });
+  spacingChartCanvas.addEventListener('click', event => {
+    const rect = spacingChartCanvas.getBoundingClientRect();
+    const leftPadding = 40;
+    const rightPadding = 16;
+    const x = (event.clientX - rect.left) * (spacingChartCanvas.clientWidth / Math.max(1, rect.width));
+    const ratio = clamp(
+      (x - leftPadding) / Math.max(1, spacingChartCanvas.clientWidth - leftPadding - rightPadding),
+      0,
+      1
+    );
+    pauseAnalysis(false);
+    setAnalysisTime((ratio * spacingChartFrameMax) / fps());
+  });
+
   $('trackMode').addEventListener('click', () => {
     analysisMode = 'track';
     renderAnalysisUi();
@@ -2857,6 +4105,8 @@
     activeTrackerId = tracker.id;
     renderTrackerList();
     renderAnalysisOverlay();
+    renderSpacingAnalysis();
+    renderCoachUi();
     queueAutosave();
   });
   $('renameTracker').addEventListener('click', () => {
@@ -2866,6 +4116,8 @@
     tracker.name = name.trim().slice(0, 40);
     renderTrackerList();
     renderAnalysisOverlay();
+    renderSpacingAnalysis();
+    renderCoachUi();
     queueAutosave();
   });
   $('deleteTracker').addEventListener('click', () => {
@@ -2875,19 +4127,24 @@
       return;
     }
     const tracker = activeTracker();
-    if (Object.keys(tracker.points || {}).length && !confirm(`「${tracker.name}」と登録した点を削除しますか？`)) return;
+    const hasPoints = Object.keys(tracker.points || {}).length || Object.keys(tracker.ownPoints || {}).length;
+    if (hasPoints && !confirm(`「${tracker.name}」と登録した点を削除しますか？`)) return;
     const index = trackers.findIndex(item => item.id === tracker.id);
     trackers.splice(index, 1);
     activeTrackerId = trackers[Math.min(index, trackers.length - 1)].id;
     renderTrackerList();
     renderAnalysisOverlay();
+    renderSpacingAnalysis();
+    renderCoachUi();
     queueAutosave();
   });
   $('deleteTrackPoint').addEventListener('click', () => {
     const tracker = activeTracker();
-    delete tracker.points[analysisFrame()];
+    delete trackerPoints(tracker)[analysisFrame()];
     renderTrackerList();
     renderAnalysisOverlay();
+    renderSpacingAnalysis();
+    renderCoachUi();
     queueAutosave();
   });
   $('trackerList').addEventListener('click', event => {
@@ -2896,6 +4153,7 @@
     activeTrackerId = button.dataset.id;
     renderTrackerList();
     renderAnalysisOverlay();
+    renderSpacingAnalysis();
     queueAutosave();
   });
 
@@ -2931,12 +4189,14 @@
   const setCurrentTrackerPoint = point => {
     if (!analysisVideo.src || !analysisVideo.videoWidth) return;
     const tracker = activeTracker();
-    tracker.points[analysisFrame()] = {
+    trackerPoints(tracker)[analysisFrame()] = {
       x: clamp(point.x / Math.max(1, analysisOverlayCanvas.clientWidth), 0, 1),
       y: clamp(point.y / Math.max(1, analysisOverlayCanvas.clientHeight), 0, 1)
     };
     renderTrackerList();
     renderAnalysisOverlay();
+    renderSpacingAnalysis();
+    renderCoachUi();
   };
 
   analysisOverlayCanvas.addEventListener('pointerdown', event => {
@@ -3053,6 +4313,7 @@
     if (!pose) return;
     if (action === 'seek') {
       pauseAnalysis(false);
+      applyAnalysisSource(pose.source || 'ref', false);
       setAnalysisTime(pose.frame / fps());
     } else if (action === 'edit') {
       const note = prompt('重要ポーズのメモ', pose.note || '');
@@ -3064,8 +4325,212 @@
       keyPoses = keyPoses.filter(item => item.id !== pose.id);
       renderKeyPoses();
       renderPhaseBar();
+      renderCoachUi();
       queueAutosave();
     }
+  });
+
+  $('coachTaskType').addEventListener('change', event => {
+    coachTaskType = coachTaskLabels[event.target.value] ? event.target.value : 'other';
+    renderCoachUi();
+    queueAutosave();
+  });
+  document.querySelector('.coach-checklist').addEventListener('click', event => {
+    const button = event.target.closest('[data-coach-check]');
+    if (!button) return;
+    const key = button.dataset.coachCheck;
+    if (!(key in coachChecks)) return;
+    coachChecks[key] = !coachChecks[key];
+    renderCoachUi();
+    queueAutosave();
+  });
+  $('startFocusReview').addEventListener('click', startFocusReview);
+  $('markCompareDone').addEventListener('click', () => {
+    if (!objectUrl || !compareOwnObjectUrl) {
+      $('coachStatus').textContent = '修正前と修正後の2本を読み込んでから比較確認してください';
+      return;
+    }
+    coachChecks.compare = !coachChecks.compare;
+    renderCoachUi();
+    queueAutosave();
+  });
+  $('saveMotionVersion').addEventListener('click', saveMotionVersion);
+  $('saveCoachReport').addEventListener('click', () => {
+    saveCoachReport().catch(error => {
+      console.error(error);
+      $('coachStatus').textContent = '最終レポートの作成に失敗しました';
+    });
+  });
+  $('versionList').addEventListener('click', event => {
+    const row = event.target.closest('.version-item');
+    const action = event.target.closest('[data-action]')?.dataset.action;
+    if (!row || !action) return;
+    if (action === 'compare') openMotionVersion(row.dataset.id);
+    else if (action === 'delete') deleteMotionVersion(row.dataset.id);
+    else if (action === 'latest') restoreLatestCompareVideo();
+  });
+  $('coachHelp').addEventListener('click', () => showTutorial(true));
+  $('tutorialClose').addEventListener('click', closeTutorial);
+  $('tutorialNext').addEventListener('click', () => {
+    if (tutorialStep >= tutorialSlides.length - 1) {
+      closeTutorial();
+      return;
+    }
+    tutorialStep += 1;
+    renderTutorial();
+  });
+  $('tutorialOverlay').addEventListener('click', event => {
+    if (event.target === $('tutorialOverlay')) closeTutorial();
+  });
+
+  reviewVideo.addEventListener('loadedmetadata', () => {
+    $('reviewEmpty').classList.add('hidden');
+    reviewVideo.playbackRate = Number(speedInput.value) || 1;
+    setReviewTime(reviewCurrentTime, false);
+  });
+  reviewVideo.addEventListener('seeked', () => {
+    reviewCurrentTime = reviewVideo.currentTime || 0;
+    updateReviewHud();
+  });
+  reviewVideo.addEventListener('play', () => {
+    reviewPlaying = true;
+    $('reviewPlay').textContent = '❚❚';
+  });
+  reviewVideo.addEventListener('pause', () => {
+    reviewPlaying = false;
+    $('reviewPlay').textContent = '▶︎';
+    queueAutosave(300);
+  });
+  reviewVideo.addEventListener('ended', () => pauseReview());
+  $('reviewPlay').addEventListener('click', () => {
+    if (!reviewVideo.src || reviewVideo.readyState < 1) {
+      $('reviewList').textContent = '動画ページで修正前動画を選んでください';
+      return;
+    }
+    if (reviewVideo.paused) {
+      reviewVideo.playbackRate = Number(speedInput.value) || 1;
+      reviewVideo.play().catch(() => {
+        $('reviewList').textContent = '動画を再生できませんでした';
+      });
+    } else {
+      pauseReview();
+    }
+  });
+  $('reviewBack1').addEventListener('click', () => {
+    pauseReview(false);
+    setReviewTime(reviewCurrentTime - 1 / fps());
+  });
+  $('reviewNext1').addEventListener('click', () => {
+    pauseReview(false);
+    setReviewTime(reviewCurrentTime + 1 / fps());
+  });
+  $('reviewPrevIssue').addEventListener('click', () => jumpReviewIssue(-1));
+  $('reviewNextIssue').addEventListener('click', () => jumpReviewIssue(1));
+  $('reviewScrub').addEventListener('input', event => {
+    pauseReview(false);
+    if (reviewVideo.duration) setReviewTime((Number(event.target.value) / 1000) * reviewVideo.duration);
+  });
+  $('addReviewItem').addEventListener('click', () => {
+    if (!reviewVideo.src || !reviewVideo.videoWidth) {
+      $('reviewList').textContent = '動画ページで修正前動画を選んでください';
+      return;
+    }
+    reviewItems.push({
+      id: uid(),
+      frame: reviewFrame(),
+      tag: $('reviewTag').value,
+      status: 'todo',
+      note: $('reviewNote').value.trim().slice(0, 160),
+      createdAt: Date.now()
+    });
+    $('reviewNote').value = '';
+    renderReviewUi();
+    queueAutosave();
+  });
+  $('reviewStatusFilter').addEventListener('change', event => {
+    reviewStatusFilter = event.target.value;
+    renderReviewList();
+    queueAutosave();
+  });
+  $('reviewTagFilter').addEventListener('change', event => {
+    reviewTagFilter = event.target.value;
+    renderReviewList();
+    queueAutosave();
+  });
+  $('reviewList').addEventListener('change', event => {
+    const row = event.target.closest('.review-item');
+    if (!row || event.target.dataset.action !== 'status') return;
+    const item = reviewItems.find(entry => entry.id === row.dataset.id);
+    if (!item) return;
+    item.status = ['todo', 'progress', 'done'].includes(event.target.value) ? event.target.value : 'todo';
+    renderReviewUi();
+    queueAutosave();
+  });
+  $('reviewList').addEventListener('click', event => {
+    const row = event.target.closest('.review-item');
+    const action = event.target.closest('[data-action]')?.dataset.action;
+    if (!row || !action || action === 'status') return;
+    const item = reviewItems.find(entry => entry.id === row.dataset.id);
+    if (!item) return;
+    if (action === 'seek') {
+      pauseReview(false);
+      setReviewTime(item.frame / fps());
+    } else if (action === 'edit') {
+      const note = prompt('修正内容', item.note || '');
+      if (note === null) return;
+      item.note = note.trim().slice(0, 160);
+      renderReviewList();
+      queueAutosave();
+    } else if (action === 'delete') {
+      reviewItems = reviewItems.filter(entry => entry.id !== item.id);
+      renderReviewUi();
+      queueAutosave();
+    }
+  });
+  $('openBeforeAfter').addEventListener('click', () => {
+    setCompareTime(reviewCurrentTime, false);
+    document.querySelector('[data-tab="comparePanel"]').click();
+  });
+  $('saveReviewSheet').addEventListener('click', saveReviewSheet);
+
+  memoVideo.addEventListener('loadedmetadata', () => {
+    $('memoVideoEmpty').classList.add('hidden');
+    memoVideo.playbackRate = Number(speedInput.value) || 1;
+    setMemoVideoTime(video.currentTime || 0, false);
+  });
+  memoVideo.addEventListener('seeked', updateMemoVideoHud);
+  memoVideo.addEventListener('timeupdate', updateMemoVideoHud);
+  memoVideo.addEventListener('play', () => {
+    $('memoVideoPlay').textContent = '❚❚';
+  });
+  memoVideo.addEventListener('pause', () => {
+    $('memoVideoPlay').textContent = '▶︎';
+    if (video.src && video.readyState >= 1) video.currentTime = memoVideo.currentTime || 0;
+    queueAutosave(300);
+  });
+  memoVideo.addEventListener('ended', () => {
+    $('memoVideoPlay').textContent = '▶︎';
+  });
+  $('memoVideoPlay').addEventListener('click', () => {
+    if (!memoVideo.src || memoVideo.readyState < 1) return;
+    if (memoVideo.paused) {
+      memoVideo.playbackRate = Number(speedInput.value) || 1;
+      memoVideo.play().catch(() => {});
+    } else {
+      memoVideo.pause();
+    }
+  });
+  $('memoVideoBack1').addEventListener('click', () => {
+    memoVideo.pause();
+    setMemoVideoTime((memoVideo.currentTime || 0) - 1 / fps());
+  });
+  $('memoVideoNext1').addEventListener('click', () => {
+    memoVideo.pause();
+    setMemoVideoTime((memoVideo.currentTime || 0) + 1 / fps());
+  });
+  $('memoVideoScrub').addEventListener('input', event => {
+    memoVideo.pause();
+    if (memoVideo.duration) setMemoVideoTime((Number(event.target.value) / 1000) * memoVideo.duration);
   });
 
   $('back5').addEventListener('click', () => stepFrames(-5));
@@ -3087,11 +4552,15 @@
     updateHud(true);
     renderCompareUi();
     renderAnalysisUi();
+    renderReviewUi();
+    updateMemoVideoHud();
     queueAutosave();
   });
   speedInput.addEventListener('change', () => {
     video.playbackRate = Number(speedInput.value) || 1;
     analysisVideo.playbackRate = Number(speedInput.value) || 1;
+    reviewVideo.playbackRate = Number(speedInput.value) || 1;
+    memoVideo.playbackRate = Number(speedInput.value) || 1;
     queueAutosave();
   });
   $('setA').addEventListener('click', () => {
@@ -3317,10 +4786,10 @@
 
   $('memoInput').addEventListener('input', event => {
     memoDraft = event.target.value;
-    memoDraftFrame = frame();
+    memoDraftFrame = memoVideo.src ? memoVideoFrame() : frame();
     queueAutosave();
   });
-  $('saveMemo').addEventListener('click', () => saveMemo(frame()));
+  $('saveMemo').addEventListener('click', () => saveMemo(memoVideo.src ? memoVideoFrame() : frame()));
   $('newGeneralMemo').addEventListener('click', () => saveMemo(null));
   $('memoSearch').addEventListener('input', renderMemos);
   $('noteList').addEventListener('click', event => {
@@ -3330,8 +4799,7 @@
     const memo = memos.find(entry => entry.id === item.dataset.id);
     if (!memo) return;
     if (action === 'seek' && memo.frame !== null) {
-      seekToFrame(memo.frame);
-      document.querySelector('[data-tab="videoPanel"]').click();
+      setMemoVideoTime(memo.frame / fps());
     } else if (action === 'delete') {
       memos = memos.filter(entry => entry.id !== memo.id);
       renderMemos();
@@ -3377,7 +4845,7 @@
     await saveProjectNow();
     const payload = {
       format: 'Animation Coach',
-      version: '0.7',
+      version: '1.0',
       exportedAt: new Date().toISOString(),
       project: serializeProject()
     };
@@ -3433,10 +4901,15 @@
   renderMemos();
   renderCompareUi();
   renderAnalysisUi();
+  renderReviewUi();
+  updateMemoVideoHud();
   applyViewTransform();
   applyLayerVisibility();
   animationLoop();
   comparisonLoop();
   analysisLoop();
+  reviewLoop();
+  memoVideoLoop();
   initPersistence();
+  setTimeout(() => showTutorial(false), 250);
 })();

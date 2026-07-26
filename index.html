@@ -34,7 +34,7 @@
     .topbar { display:flex; gap:10px; align-items:center; margin-bottom:10px; }
     .title { font-weight:800; letter-spacing:.02em; flex:1; }
     .badge { color:var(--muted); font-size:12px; }
-    .tabs { display:grid; grid-template-columns:repeat(5,1fr); gap:7px; margin-bottom:10px; }
+    .tabs { display:grid; grid-template-columns:repeat(6,1fr); gap:7px; margin-bottom:10px; }
     .tab {
       min-height:44px; border-radius:12px; border:1px solid var(--border);
       background:var(--panel); color:var(--text); font-weight:750;
@@ -318,6 +318,38 @@
     .tracker-dot {
       display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px;
     }
+    .analysis-source.active { outline:2px solid var(--accent); background:var(--panel2); }
+    .spacing-panel {
+      display:grid; gap:8px; padding:9px; border:1px solid var(--border);
+      border-radius:14px; background:var(--panel);
+    }
+    .spacing-panel > .row {
+      display:grid; grid-template-columns:repeat(2,minmax(0,1fr));
+    }
+    .spacing-chart-wrap {
+      position:relative; width:100%; height:220px; overflow:hidden;
+      border:1px solid var(--border); border-radius:11px; background:#0c0f15;
+    }
+    #spacingChartCanvas { width:100%; height:100%; display:block; touch-action:manipulation; }
+    .spacing-legend { display:flex; gap:14px; color:var(--muted); font-size:12px; flex-wrap:wrap; }
+    .legend-line { display:inline-block; width:22px; height:3px; margin-right:5px; vertical-align:middle; }
+    .spacing-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; }
+    .spacing-stat {
+      padding:7px; border-radius:10px; background:var(--panel2);
+      text-align:center; color:var(--muted); font-size:11px;
+    }
+    .spacing-stat strong { display:block; color:#fff; font-size:18px; }
+    .spacing-issues { display:flex; gap:6px; flex-wrap:wrap; }
+    .spacing-issue {
+      min-height:34px; border:1px solid var(--border); border-radius:9px;
+      padding:4px 8px; background:#ffffff0b; color:var(--text); font-weight:750;
+    }
+    .spacing-issue.fast { color:#ff6b6b; }
+    .spacing-issue.slow { color:#64d2ff; }
+    .speed-ramp {
+      height:8px; border-radius:999px;
+      background:linear-gradient(90deg,#0a84ff,#30d158,#ffd60a,#ff453a);
+    }
     .guide-colors { display:flex; gap:7px; align-items:center; }
     .guide-color {
       width:34px; height:34px; border-radius:50%; border:2px solid var(--border);
@@ -351,8 +383,98 @@
     }
     .pose-info { display:grid; grid-template-columns:auto 1fr auto; gap:6px; align-items:center; padding:7px; }
     .pose-note { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+    .review-shell { display:grid; gap:9px; }
+    .coach-card {
+      display:grid; gap:10px; padding:12px; border:1px solid #ff4fa360;
+      border-radius:16px; background:linear-gradient(145deg,#181b27,#15121e);
+    }
+    .coach-head { display:flex; gap:9px; align-items:center; }
+    .coach-head h2 { margin:0; font-size:20px; flex:1; }
+    .coach-task { min-width:145px; }
+    .coach-progress-head { display:flex; justify-content:space-between; color:var(--muted); font-size:12px; }
+    .coach-progress {
+      height:12px; overflow:hidden; border-radius:999px; background:#080a0f;
+      border:1px solid var(--border);
+    }
+    .coach-progress > div {
+      width:0; height:100%; border-radius:inherit;
+      background:linear-gradient(90deg,#4deBff,#8b7cff,#ff4fa3);
+      transition:width .25s ease;
+    }
+    .coach-checklist { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; }
+    .coach-check {
+      min-height:58px; border:1px solid var(--border); border-radius:11px;
+      padding:6px; background:var(--panel); color:var(--text); font-weight:750;
+    }
+    .coach-check.done { color:#30d158; border-color:#30d158; background:#30d15812; }
+    .coach-guide {
+      padding:9px; border-radius:11px; background:#0d1017;
+      color:var(--muted); font-size:13px; line-height:1.55;
+    }
+    .coach-actions { display:grid; grid-template-columns:repeat(4,1fr); gap:7px; }
+    .version-list { display:grid; gap:6px; }
+    .version-item {
+      display:grid; grid-template-columns:minmax(0,1fr) auto;
+      gap:8px; align-items:center; padding:8px;
+      border:1px solid var(--border); border-radius:11px; background:var(--panel);
+    }
+    .version-name { font-weight:800; }
+    .version-meta { color:var(--muted); font-size:11px; margin-top:2px; }
+    .tutorial-overlay {
+      position:fixed; z-index:100; inset:0; display:grid; place-items:center;
+      padding:20px; background:#06070bdc; backdrop-filter:blur(10px);
+    }
+    .tutorial-card {
+      width:min(520px,100%); padding:22px; border:1px solid var(--border);
+      border-radius:22px; background:linear-gradient(145deg,#1d2230,#11131a);
+      box-shadow:0 24px 80px #000a;
+    }
+    .tutorial-icon { font-size:48px; }
+    .tutorial-card h2 { margin:8px 0; }
+    .tutorial-card p { min-height:72px; color:var(--muted); line-height:1.65; }
+    .tutorial-dots { display:flex; gap:7px; margin:14px 0; }
+    .tutorial-dot { width:9px; height:9px; border-radius:50%; background:var(--border); }
+    .tutorial-dot.active { background:var(--accent); }
+    .review-stage {
+      position:relative; width:100%; aspect-ratio:16/9; overflow:hidden;
+      border:1px solid var(--border); border-radius:16px; background:#000;
+    }
+    .review-stage video { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+    .review-hud {
+      position:absolute; z-index:2; top:8px; left:8px; right:8px;
+      display:flex; justify-content:space-between; pointer-events:none;
+    }
+    .review-hud span { padding:5px 8px; border-radius:8px; background:#000a; }
+    .review-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:7px; }
+    .review-stat {
+      padding:9px; border:1px solid var(--border); border-radius:12px;
+      background:var(--panel); text-align:center;
+    }
+    .review-stat strong { display:block; font-size:22px; color:var(--accent); }
+    .review-form,.review-filter {
+      display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px;
+    }
+    .review-form .wide { grid-column:span 2; }
+    .review-list { display:grid; gap:7px; }
+    .review-item {
+      display:grid; grid-template-columns:auto auto minmax(0,1fr) auto auto;
+      gap:7px; align-items:center; padding:8px;
+      border:1px solid var(--border); border-radius:12px; background:var(--panel);
+    }
+    .review-item.done { opacity:.62; }
+    .review-tag {
+      padding:5px 7px; border-radius:8px; background:#ffffff12;
+      color:#fff; font-size:12px; font-weight:800;
+    }
+    .review-note { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .review-status {
+      min-height:34px; border:1px solid var(--border); border-radius:8px;
+      background:var(--panel2); color:var(--text); font-weight:750;
+    }
     input[type=file] { display:none; }
     @media (max-width:680px) {
+      .tabs { gap:4px; }
+      .tab { min-height:42px; padding:2px; font-size:11px; }
       .toolbar { grid-template-columns:repeat(3,1fr); }
       .grid { grid-template-columns:repeat(2,1fr); }
       .btn { font-size:13px; padding:4px; }
@@ -361,6 +483,16 @@
       .compare-tools { grid-template-columns:repeat(2,1fr); }
       .sync-grid,.compare-adjust { grid-template-columns:repeat(2,1fr); }
       .analysis-settings { grid-template-columns:repeat(2,1fr); }
+      .spacing-stats { grid-template-columns:repeat(2,1fr); }
+      .review-form,.review-filter { grid-template-columns:repeat(2,1fr); }
+      .review-form .wide { grid-column:span 2; }
+      .review-item { grid-template-columns:auto auto minmax(0,1fr) auto; }
+      .review-status { grid-column:2/-1; }
+      .coach-head { align-items:stretch; flex-wrap:wrap; }
+      .coach-head h2 { flex-basis:100%; }
+      .coach-task { flex:1; }
+      .coach-checklist { grid-template-columns:repeat(2,1fr); }
+      .coach-actions { grid-template-columns:repeat(2,1fr); }
     }
     @media (orientation:landscape) and (max-height:600px) {
       html,body { height:100%; }
@@ -446,6 +578,8 @@
       #analysisPanel.active { overflow-y:auto; }
       .analysis-stage { height:min(50dvh,210px); aspect-ratio:auto; }
       .analysis-shell .compare-transport .btn { min-height:36px; font-size:11px; }
+      #reviewPanel.active { overflow-y:auto; }
+      .review-stage { height:min(50dvh,210px); aspect-ratio:auto; }
     }
   </style>
 </head>
@@ -453,13 +587,14 @@
 <main class="app">
   <div class="topbar">
     <div class="title">Animation Coach</div>
-    <div class="badge">v0.7</div>
+    <div class="badge">v1.0</div>
   </div>
 
   <div class="tabs" role="tablist">
     <button class="tab active" data-tab="videoPanel">🎥 動画</button>
     <button class="tab" data-tab="comparePanel">⚖️ 比較</button>
     <button class="tab" data-tab="analysisPanel">📈 分析</button>
+    <button class="tab" data-tab="reviewPanel">🧭 コーチ</button>
     <button class="tab" data-tab="memoPanel">📝 メモ</button>
     <button class="tab" data-tab="exportPanel">💾 保存</button>
   </div>
@@ -574,14 +709,14 @@
       <div class="compare-videos" id="compareVideos">
         <div class="compare-pane">
           <div class="compare-video-wrap">
-            <div class="compare-label">参考動画</div>
+            <div class="compare-label">修正前・参考</div>
             <video id="compareRefVideo" playsinline preload="metadata"></video>
             <div class="compare-empty" id="compareRefEmpty">参考動画を選択</div>
           </div>
         </div>
         <div class="compare-pane">
           <div class="compare-video-wrap">
-            <div class="compare-label">自分のモーション</div>
+            <div class="compare-label" id="compareOwnLabel">修正後・自作</div>
             <video id="compareOwnVideo" playsinline muted preload="metadata"></video>
             <div class="compare-empty" id="compareOwnEmpty">自分の動画を選択</div>
           </div>
@@ -602,9 +737,9 @@
       </div>
 
       <div class="compare-tools">
-        <label class="btn small" for="compareRefFile" style="display:grid;place-items:center;">参考動画を選ぶ</label>
+        <label class="btn small" for="compareRefFile" style="display:grid;place-items:center;">修正前を選ぶ</label>
         <input id="compareRefFile" type="file" accept="video/*">
-        <label class="btn small" for="compareOwnFile" style="display:grid;place-items:center;">自分の動画を選ぶ</label>
+        <label class="btn small" for="compareOwnFile" style="display:grid;place-items:center;">修正後を選ぶ</label>
         <input id="compareOwnFile" type="file" accept="video/*">
         <div class="field">
           <label for="compareMode">表示方法</label>
@@ -689,6 +824,13 @@
         <button class="btn" id="analysisNext5">+5F</button>
       </div>
 
+      <div class="section-title">分析対象</div>
+      <div class="row">
+        <button class="btn small analysis-source active" id="analysisRefSource">修正前・参考</button>
+        <button class="btn small analysis-source" id="analysisOwnSource">修正後・自作</button>
+      </div>
+      <div class="compare-hint" id="analysisSourceHint">修正前動画を分析中</div>
+
       <div class="section-title">オニオンスキン</div>
       <div class="analysis-settings">
         <div class="field">
@@ -740,6 +882,31 @@
         <div class="compare-hint" style="margin-top:6px;">ここで描いたガイドは全フレームに表示されます。</div>
       </div>
 
+      <div class="section-title">タイミング・スペーシング分析</div>
+      <div class="spacing-panel">
+        <div class="spacing-chart-wrap"><canvas id="spacingChartCanvas"></canvas></div>
+        <div class="spacing-legend">
+          <span><i class="legend-line" style="background:#ff4fa3;"></i>修正前</span>
+          <span><i class="legend-line" style="background:#64d2ff;"></i>修正後</span>
+          <span>横：フレーム ／ 縦：移動量</span>
+        </div>
+        <div class="speed-ramp" aria-label="青が遅く、赤が速い"></div>
+        <div class="spacing-stats">
+          <div class="spacing-stat"><strong id="spacingPointCount">0</strong>ポイント</div>
+          <div class="spacing-stat"><strong id="spacingAverage">0.00</strong>平均速度</div>
+          <div class="spacing-stat"><strong id="spacingMaximum">0.00</strong>最大速度</div>
+          <div class="spacing-stat"><strong id="spacingIssueCount">0</strong>変化点</div>
+        </div>
+        <div class="row">
+          <button class="btn small primary" id="speedColorToggle">軌跡速度色 ON</button>
+          <button class="btn small" id="autoTrackBack">前5F 半自動追跡</button>
+          <button class="btn small" id="autoTrackForward">後5F 半自動追跡</button>
+          <button class="btn small" id="saveSpacingSheet">グラフ分析シート保存</button>
+        </div>
+        <div class="compare-hint" id="autoTrackStatus">現在Fへ点を置いてから半自動追跡を使えます。ズレた点はタップで修正できます。</div>
+        <div id="spacingIssues" class="spacing-issues"></div>
+      </div>
+
       <div class="section-title">動作区間</div>
       <div id="phaseBar" class="phase-bar"></div>
       <div class="row">
@@ -759,7 +926,132 @@
     </div>
   </section>
 
+  <section class="panel" id="reviewPanel">
+    <div class="review-shell">
+      <div class="coach-card">
+        <div class="coach-head">
+          <h2>🧭 コーチモード</h2>
+          <div class="field coach-task">
+            <label for="coachTaskType">課題タイプ</label>
+            <select id="coachTaskType">
+              <option value="walk">歩き</option>
+              <option value="run">走り</option>
+              <option value="attack" selected>攻撃・アクション</option>
+              <option value="idle">待機・演技</option>
+              <option value="creature">クリーチャー</option>
+              <option value="other">その他</option>
+            </select>
+          </div>
+          <button class="btn small" id="coachHelp">使い方</button>
+        </div>
+        <div class="coach-progress-head">
+          <span>添削進捗</span><strong id="coachProgressLabel">0 / 6</strong>
+        </div>
+        <div class="coach-progress"><div id="coachProgressBar"></div></div>
+        <div class="coach-checklist">
+          <button class="coach-check" data-coach-check="poses">① 重要ポーズ</button>
+          <button class="coach-check" data-coach-check="balance">② 重心・シルエット</button>
+          <button class="coach-check" data-coach-check="contact">③ 足接地</button>
+          <button class="coach-check" data-coach-check="spacing">④ 軌跡・スペーシング</button>
+          <button class="coach-check" data-coach-check="issues">⑤ 問題修正</button>
+          <button class="coach-check" data-coach-check="compare">⑥ 修正前後比較</button>
+        </div>
+        <div id="coachGuide" class="coach-guide"></div>
+        <div class="coach-actions">
+          <button class="btn small primary" id="startFocusReview">未修正を集中確認</button>
+          <button class="btn small" id="markCompareDone">比較確認済み</button>
+          <button class="btn small" id="saveMotionVersion">修正後を版保存</button>
+          <button class="btn small" id="saveCoachReport">最終レポート保存</button>
+        </div>
+        <div class="status" id="coachStatus">動画を選ぶところから始めましょう</div>
+      </div>
+
+      <div class="review-stage">
+        <video id="reviewVideo" playsinline muted preload="metadata"></video>
+        <div class="analysis-empty" id="reviewEmpty">動画ページで修正前動画を選択</div>
+        <div class="review-hud">
+          <span id="reviewFrameHud">F 0</span>
+          <span id="reviewTimeHud">00:00.000</span>
+        </div>
+      </div>
+      <input id="reviewScrub" class="compare-scrub" type="range" min="0" max="1000" value="0" step="1">
+      <div class="compare-transport">
+        <button class="btn" id="reviewBack1">−1F</button>
+        <button class="btn" id="reviewPrevIssue">◀ 前の問題</button>
+        <button class="btn primary" id="reviewPlay">▶︎</button>
+        <button class="btn" id="reviewNextIssue">次の問題 ▶</button>
+        <button class="btn" id="reviewNext1">+1F</button>
+      </div>
+
+      <div class="review-stats">
+        <div class="review-stat"><strong id="reviewTotalCount">0</strong>全項目</div>
+        <div class="review-stat"><strong id="reviewTodoCount">0</strong>未修正</div>
+        <div class="review-stat"><strong id="reviewProgressCount">0</strong>修正中</div>
+        <div class="review-stat"><strong id="reviewDoneCount">0</strong>完了</div>
+      </div>
+
+      <div class="section-title">修正項目を追加</div>
+      <div class="review-form">
+        <div class="field">
+          <label for="reviewTag">問題タグ</label>
+          <select id="reviewTag">
+            <option>重心</option><option>シルエット</option><option>タイミング</option>
+            <option>足滑り</option><option>ポーズ</option><option>軌道</option><option>その他</option>
+          </select>
+        </div>
+        <div class="field wide">
+          <label for="reviewNote">修正内容</label>
+          <input id="reviewNote" type="text" maxlength="160" placeholder="例：接地時に腰が右へ逃げている">
+        </div>
+        <button class="btn small primary" id="addReviewItem">現在Fへ追加</button>
+      </div>
+
+      <div class="section-title">修正一覧</div>
+      <div class="review-filter">
+        <div class="field">
+          <label for="reviewStatusFilter">進捗で絞る</label>
+          <select id="reviewStatusFilter">
+            <option value="all">すべて</option>
+            <option value="open">未完了のみ</option>
+            <option value="todo">未修正</option>
+            <option value="progress">修正中</option>
+            <option value="done">完了</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="reviewTagFilter">タグで絞る</label>
+          <select id="reviewTagFilter">
+            <option value="all">すべて</option>
+            <option>重心</option><option>シルエット</option><option>タイミング</option>
+            <option>足滑り</option><option>ポーズ</option><option>軌道</option><option>その他</option>
+          </select>
+        </div>
+        <button class="btn small" id="openBeforeAfter">修正前後を比較</button>
+        <button class="btn small" id="saveReviewSheet">レビューシート保存</button>
+      </div>
+      <div id="reviewList" class="review-list"></div>
+
+      <div class="section-title">修正後のバージョン履歴</div>
+      <div id="versionList" class="version-list"></div>
+    </div>
+  </section>
+
   <section class="panel" id="memoPanel">
+    <div class="review-stage" style="margin-bottom:8px;">
+      <video id="memoVideo" playsinline muted preload="metadata"></video>
+      <div class="analysis-empty" id="memoVideoEmpty">動画ページで動画を選択</div>
+      <div class="review-hud">
+        <span id="memoVideoFrameHud">F 0</span>
+        <span id="memoVideoTimeHud">00:00.000</span>
+      </div>
+    </div>
+    <input id="memoVideoScrub" class="compare-scrub" type="range" min="0" max="1000" value="0" step="1">
+    <div class="row">
+      <button class="btn small" id="memoVideoBack1">−1F</button>
+      <button class="btn small primary" id="memoVideoPlay">▶︎</button>
+      <button class="btn small" id="memoVideoNext1">+1F</button>
+    </div>
+
     <div class="section-title">現在フレームのメモ</div>
     <div class="field" style="margin-bottom:9px;">
       <label>リンク先</label>
@@ -820,6 +1112,19 @@
     </div>
   </section>
 </main>
+
+<div class="tutorial-overlay hidden" id="tutorialOverlay">
+  <div class="tutorial-card">
+    <div class="tutorial-icon" id="tutorialIcon">🎬</div>
+    <h2 id="tutorialTitle">Animation Coachへようこそ</h2>
+    <p id="tutorialText"></p>
+    <div class="tutorial-dots" id="tutorialDots"></div>
+    <div class="row">
+      <button class="btn small" id="tutorialClose">閉じる</button>
+      <button class="btn small primary" id="tutorialNext">次へ</button>
+    </div>
+  </div>
+</div>
 
 <script type="text/plain" id="legacy-v03">
 (() => {
