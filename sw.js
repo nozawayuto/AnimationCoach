@@ -1,5 +1,5 @@
-const CACHE="animation-coach-v1.0";
-const ASSETS=["./","./index.html","./app.js","./manifest.webmanifest","./icon-192.png","./icon-512.png"];
+const CACHE="animation-coach-v1.1";
+const ASSETS=["./","./index.html","./app.js","./cloud-config.js","./cloud-sync.js","./manifest.webmanifest","./icon-192.png","./icon-512.png"];
 
 self.addEventListener("install",event=>{
   event.waitUntil(

@@ -415,6 +415,7 @@
       .then(async () => {
         await storePut(PROJECT_STORE, record);
         localStorage.setItem(LAST_PROJECT_KEY, record.id);
+        window.AnimationCoachCloud?.onLocalSave?.(record);
         setAutosaveStatus('saved', `保存済み ${new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`);
         if (refreshList) await renderProjectList();
         else scheduleProjectListRefresh();
@@ -818,9 +819,10 @@
     return true;
   }
 
-  async function restoreProject(record) {
+  async function restoreProject(record, { skipCloud = false } = {}) {
     applyProjectRecord(record);
     localStorage.setItem(LAST_PROJECT_KEY, projectId);
+    if (!skipCloud) await window.AnimationCoachCloud?.prepareProject?.(projectId);
     const videoRecord = await storeGet(VIDEO_STORE, projectId).catch(() => null);
     if (Array.isArray(videoRecord?.versions)) {
       motionVersions = videoRecord.versions
@@ -3137,6 +3139,7 @@
         createdAt: version.createdAt
       }));
       await saveProjectNow();
+      window.AnimationCoachCloud?.onVideoChanged?.(projectId);
       renderVersionList();
       $('coachStatus').textContent = `「${label}」を保存しました（最大8件）`;
     } catch (error) {
@@ -3177,6 +3180,7 @@
       }
       motionVersions = motionVersions.filter(version => version.id !== id);
       await saveProjectNow();
+      window.AnimationCoachCloud?.onVideoChanged?.(projectId);
       if (motionVersionPreviewId === id) await restoreLatestCompareVideo();
       renderVersionList();
       $('coachStatus').textContent = `「${metadata.label}」を削除しました`;
@@ -3770,6 +3774,7 @@
         setAutosaveStatus('error', '動画の端末保存に失敗しました。空き容量を確認してください');
       }
       await saveProjectNow({ refreshList: true });
+      window.AnimationCoachCloud?.onVideoChanged?.(projectId);
       setStatus('動画を読み込み、自動保存しました');
     } catch (error) {
       console.error(error);
@@ -3801,6 +3806,7 @@
       compareOwnVideoName = selected.name;
       setCompareTime(compareCurrentTime, false);
       await saveProjectNow({ refreshList: true });
+      window.AnimationCoachCloud?.onVideoChanged?.(projectId);
       renderCoachUi();
     } catch (error) {
       console.error(error);
@@ -4836,6 +4842,7 @@
         storeDelete(PROJECT_STORE, id),
         storeDelete(VIDEO_STORE, id).catch(() => {})
       ]);
+      await window.AnimationCoachCloud?.deleteProject?.(id);
       if (id === projectId) await createNewProject({ saveCurrent: false });
       else await renderProjectList();
     }
@@ -4910,6 +4917,22 @@
   analysisLoop();
   reviewLoop();
   memoVideoLoop();
-  initPersistence();
+  window.AnimationCoachStorage = {
+    getAllProjects: () => storeGetAll(PROJECT_STORE),
+    getProject: id => storeGet(PROJECT_STORE, id),
+    putProject: record => storePut(PROJECT_STORE, record),
+    getVideo: id => storeGet(VIDEO_STORE, id).catch(() => null),
+    putVideo: record => storePut(VIDEO_STORE, record),
+    currentProjectId: () => projectId,
+    renderProjectList,
+    restoreProjectById: async (id, skipCloud = false) => {
+      const record = await storeGet(PROJECT_STORE, id);
+      if (record) await restoreProject(record, { skipCloud });
+    }
+  };
+
+  initPersistence()
+    .then(() => window.AnimationCoachCloud?.init?.())
+    .catch(error => console.error(error));
   setTimeout(() => showTutorial(false), 250);
 })();
