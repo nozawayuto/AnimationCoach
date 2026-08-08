@@ -1,4 +1,4 @@
-const CACHE="animation-coach-v1.1";
+const CACHE="animation-coach-v1.2";
 const ASSETS=["./","./index.html","./app.js","./cloud-config.js","./cloud-sync.js","./manifest.webmanifest","./icon-192.png","./icon-512.png"];
 
 self.addEventListener("install",event=>{

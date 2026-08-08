@@ -631,8 +631,7 @@
     document.querySelectorAll('.swatch').forEach(button => {
       button.classList.toggle('active', button.dataset.color === color);
     });
-    $('loop').textContent = `ABループ ${loopOn ? 'ON' : 'OFF'}`;
-    $('loop').classList.toggle('primary', loopOn);
+    syncPlaybackRangeUi();
     $('memoInput').value = memoDraft;
     renderMemos();
     renderLayerList();
@@ -691,6 +690,7 @@
     currentLoadedFrame = -1;
     renderCurrentFrame(0);
     renderCoachUi();
+    syncPlaybackRangeUi();
   }
 
   function loadVideoBlob(blob, name = '') {
@@ -946,8 +946,7 @@
     video.playbackRate = 1;
     $('projectNameInput').value = projectName;
     $('memoInput').value = '';
-    $('loop').textContent = 'ABループ OFF';
-    $('loop').classList.remove('primary');
+    syncPlaybackRangeUi();
     clearVideoSource();
     clearCompareOwnSource();
     renderLayerList();
@@ -1608,6 +1607,76 @@
 
   function stepFrames(amount) {
     seekToFrame(frame() + amount);
+  }
+
+  function playbackRangeFrames() {
+    const rate = fps();
+    const lastFrame = video.duration
+      ? Math.max(0, Math.ceil(video.duration * rate) - 1)
+      : Math.max(0, Math.ceil(Math.max(A || 0, B || 0) * rate) - 1);
+    const startFrame = A === null ? 0 : clamp(Math.round(A * rate), 0, lastFrame);
+    const endFrame = B === null
+      ? lastFrame
+      : clamp(Math.max(0, Math.ceil(B * rate) - 1), 0, lastFrame);
+    return { startFrame, endFrame, lastFrame };
+  }
+
+  function syncPlaybackRangeUi() {
+    if (video.duration) {
+      const maxStart = Math.max(0, video.duration - 1 / fps());
+      if (A !== null) A = clamp(A, 0, maxStart);
+      if (B !== null) B = clamp(B, 0, video.duration);
+    }
+    const { startFrame, endFrame, lastFrame } = playbackRangeFrames();
+    const startInput = $('rangeStartFrame');
+    const endInput = $('rangeEndFrame');
+    startInput.max = String(lastFrame);
+    endInput.max = String(lastFrame);
+    startInput.value = String(startFrame);
+    endInput.value = String(endFrame);
+
+    const hasRange = A !== null && B !== null && B > A;
+    if (!hasRange) loopOn = false;
+    $('setA').textContent = A === null ? '現在位置→開始' : `開始 ${startFrame}F`;
+    $('setB').textContent = B === null ? '現在位置→終了' : `終了 ${endFrame}F`;
+    $('loop').textContent = `範囲再生 ${loopOn ? 'ON' : 'OFF'}`;
+    $('loop').classList.toggle('primary', loopOn);
+    $('playbackRangeStatus').textContent = hasRange
+      ? `選択範囲：${startFrame}F ～ ${endFrame}F（${fmtTime(startFrame / fps())} ～ ${fmtTime(endFrame / fps())}）`
+      : '動画全体を再生';
+  }
+
+  function applyPlaybackRange() {
+    if (!video.duration) {
+      setStatus('動画を先に選んでください');
+      return;
+    }
+    const { lastFrame } = playbackRangeFrames();
+    const startFrame = clamp(Math.round(Number($('rangeStartFrame').value) || 0), 0, lastFrame);
+    const endFrame = clamp(Math.round(Number($('rangeEndFrame').value) || 0), 0, lastFrame);
+    if (endFrame < startFrame) {
+      setStatus('終了フレームは開始フレーム以降にしてください');
+      return;
+    }
+
+    A = startFrame / fps();
+    B = Math.min(video.duration, (endFrame + 1) / fps());
+    loopOn = true;
+    video.pause();
+    video.currentTime = A;
+    updateHud(true);
+    syncPlaybackRangeUi();
+    setStatus(`${startFrame}F ～ ${endFrame}Fを再生範囲に設定しました`);
+    queueAutosave();
+  }
+
+  function clearPlaybackRange() {
+    A = null;
+    B = null;
+    loopOn = false;
+    syncPlaybackRangeUi();
+    setStatus('再生範囲を解除しました');
+    queueAutosave();
   }
 
   function animationLoop() {
@@ -3822,6 +3891,10 @@
       return;
     }
     if (video.paused) {
+      if (loopOn && A !== null && B !== null && B > A
+          && (video.currentTime < A || video.currentTime >= B)) {
+        video.currentTime = A;
+      }
       video.play().catch(() => setStatus('再生できませんでした'));
     } else {
       video.pause();
@@ -3842,6 +3915,7 @@
     empty.classList.add('hidden');
     resizeCanvases();
     updateHud(true);
+    syncPlaybackRangeUi();
   });
   video.addEventListener('timeupdate', () => {
     updateHud();
@@ -4556,6 +4630,7 @@
     currentLoadedFrame = -1;
     onionFrameCache.clear();
     updateHud(true);
+    syncPlaybackRangeUi();
     renderCompareUi();
     renderAnalysisUi();
     renderReviewUi();
@@ -4570,13 +4645,28 @@
     queueAutosave();
   });
   $('setA').addEventListener('click', () => {
-    A = video.currentTime || 0;
-    setStatus(`A点 ${fmtTime(A)}`);
+    if (!video.duration) {
+      setStatus('動画を先に選んでください');
+      return;
+    }
+    A = frame() / fps();
+    if (B !== null && B <= A) {
+      B = null;
+      loopOn = false;
+    }
+    syncPlaybackRangeUi();
+    setStatus(`開始位置 ${frame()}F`);
     queueAutosave();
   });
   $('setB').addEventListener('click', () => {
-    B = video.currentTime || 0;
-    setStatus(`B点 ${fmtTime(B)}`);
+    if (!video.duration) {
+      setStatus('動画を先に選んでください');
+      return;
+    }
+    B = Math.min(video.duration, (frame() + 1) / fps());
+    if (A !== null && B <= A) loopOn = false;
+    syncPlaybackRangeUi();
+    setStatus(`終了位置 ${Math.max(0, Math.ceil(B * fps()) - 1)}F`);
     queueAutosave();
   });
   $('loop').addEventListener('click', () => {
@@ -4585,9 +4675,16 @@
       return;
     }
     loopOn = !loopOn;
-    $('loop').textContent = `ABループ ${loopOn ? 'ON' : 'OFF'}`;
-    $('loop').classList.toggle('primary', loopOn);
+    if (loopOn) seekToTime(A);
+    syncPlaybackRangeUi();
     queueAutosave();
+  });
+  $('applyPlaybackRange').addEventListener('click', applyPlaybackRange);
+  $('clearPlaybackRange').addEventListener('click', clearPlaybackRange);
+  ['rangeStartFrame', 'rangeEndFrame'].forEach(id => {
+    $(id).addEventListener('keydown', event => {
+      if (event.key === 'Enter') applyPlaybackRange();
+    });
   });
 
   document.querySelectorAll('.tool').forEach(button => {
@@ -4897,6 +4994,67 @@
   });
   window.addEventListener('pagehide', () => {
     saveProjectNow();
+  });
+
+  document.addEventListener('keydown', event => {
+    if (event.isComposing) return;
+    if (event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+
+    const key = event.key.toLowerCase();
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && key === 'z') {
+      if (document.querySelector('.panel.active')?.id !== 'videoPanel') return;
+      event.preventDefault();
+      $('undo').click();
+      return;
+    }
+    if (event.ctrlKey || event.altKey || event.metaKey) return;
+    if (key !== 'a' && key !== 'd') return;
+
+    const amount = key === 'd' ? 1 : -1;
+    const activePanel = document.querySelector('.panel.active')?.id;
+    if (activePanel === 'videoPanel') {
+      stepFrames(amount);
+    } else if (activePanel === 'comparePanel') {
+      stepCompareFrames(amount);
+    } else if (activePanel === 'analysisPanel') {
+      stepAnalysisFrames(amount);
+    } else if (activePanel === 'reviewPanel') {
+      pauseReview(false);
+      setReviewTime(reviewCurrentTime + amount / fps());
+    } else if (activePanel === 'memoPanel') {
+      memoVideo.pause();
+      setMemoVideoTime((memoVideo.currentTime || 0) + amount / fps());
+    } else {
+      return;
+    }
+    event.preventDefault();
+  });
+
+  $('fullscreen').addEventListener('click', async () => {
+    if (!video.src) {
+      setStatus('動画を先に選んでください');
+      return;
+    }
+    try {
+      if (document.fullscreenElement === stage) {
+        await document.exitFullscreen();
+      } else if (stage.requestFullscreen) {
+        await stage.requestFullscreen();
+      } else if (typeof video.webkitEnterFullscreen === 'function') {
+        video.webkitEnterFullscreen();
+      } else {
+        setStatus('このブラウザは全画面表示に対応していません');
+      }
+    } catch (error) {
+      setStatus(`全画面表示を開始できませんでした: ${error.message}`);
+    }
+  });
+
+  document.addEventListener('fullscreenchange', () => {
+    const isFullscreen = document.fullscreenElement === stage;
+    $('fullscreen').textContent = isFullscreen ? '⛶ 全画面終了' : '⛶ 全画面';
+    $('fullscreen').setAttribute('aria-pressed', String(isFullscreen));
+    requestAnimationFrame(resizeCanvases);
   });
 
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {

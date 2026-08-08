@@ -77,6 +77,11 @@
       color:#fff; background:#111b; font-weight:800; backdrop-filter:blur(8px);
     }
     .stage-action.off { color:var(--muted); opacity:.82; }
+    .stage-action.fullscreen-action { left:9px; right:auto; }
+    .stage:fullscreen {
+      width:100vw; height:100vh; aspect-ratio:auto;
+      border:0; border-radius:0;
+    }
     .scrub { width:100%; accent-color:var(--accent); margin:12px 0 4px; }
     .transport { display:grid; grid-template-columns:repeat(5,1fr); gap:7px; margin:8px 0; }
     .btn {
@@ -130,6 +135,7 @@
       border-radius:9px; min-width:36px; min-height:36px;
     }
     .status { min-height:22px; color:var(--muted); font-size:13px; margin-top:8px; }
+    .range-status { color:var(--muted); font-size:13px; margin-top:7px; }
     .help {
       color:var(--muted); font-size:13px; line-height:1.5;
       border-top:1px solid var(--border); padding-top:12px; margin-top:12px;
@@ -627,6 +633,7 @@
             <span id="frameHud">F 0</span>
             <span id="timeHud">00:00.000</span>
           </div>
+          <button id="fullscreen" class="stage-action fullscreen-action" type="button" aria-pressed="false">⛶ 全画面</button>
           <button id="toggleAllLayers" class="stage-action" type="button" aria-pressed="true">👁 書込 ON</button>
         </div>
 
@@ -658,10 +665,19 @@
         <div class="row clip-row">
           <label class="btn small" for="file" style="display:grid;place-items:center;">動画を選ぶ</label>
           <input id="file" type="file" accept="video/*">
-          <button class="btn small" id="setA">A点</button>
-          <button class="btn small" id="setB">B点</button>
-          <button class="btn small" id="loop">ABループ OFF</button>
+          <button class="btn small" id="setA">現在位置→開始</button>
+          <button class="btn small" id="setB">現在位置→終了</button>
+          <button class="btn small" id="loop">範囲再生 OFF</button>
         </div>
+
+        <div class="section-title" style="margin-top:12px;">再生範囲</div>
+        <div class="grid">
+          <div class="field"><label for="rangeStartFrame">開始フレーム</label><input id="rangeStartFrame" type="number" min="0" value="0" inputmode="numeric"></div>
+          <div class="field"><label for="rangeEndFrame">終了フレーム</label><input id="rangeEndFrame" type="number" min="0" value="0" inputmode="numeric"></div>
+          <button class="btn small primary" id="applyPlaybackRange">範囲を設定</button>
+          <button class="btn small" id="clearPlaybackRange">範囲を解除</button>
+        </div>
+        <div class="range-status" id="playbackRangeStatus">動画全体を再生</div>
 
         <div class="zoom-row">
           <button class="btn small" id="resetView">元の大きさに戻す</button>
