@@ -206,6 +206,16 @@
     .cloud-state.syncing .cloud-dot { background:#ffd60a; }
     .cloud-state.error .cloud-dot { background:var(--danger); }
     .cloud-account { color:var(--muted); font-size:13px; overflow-wrap:anywhere; margin-bottom:10px; }
+    .cloud-summary {
+      display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px;
+      margin:0 0 10px;
+    }
+    .cloud-summary > div {
+      min-height:42px; padding:8px 10px; border:1px solid var(--border);
+      border-radius:10px; background:#ffffff08; color:var(--muted); font-size:12px;
+      display:flex; align-items:center;
+    }
+    .cloud-actions { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }
     .cloud-progress { width:100%; margin-top:10px; accent-color:var(--accent); }
     .text-controls {
       display:grid; grid-template-columns:minmax(160px,1fr) auto auto;
@@ -511,6 +521,8 @@
       .coach-task { flex:1; }
       .coach-checklist { grid-template-columns:repeat(2,1fr); }
       .coach-actions { grid-template-columns:repeat(2,1fr); }
+      .cloud-actions { grid-template-columns:1fr 1fr; }
+      .cloud-actions #cloudSignOut { grid-column:1/-1; }
     }
     @media (orientation:landscape) and (max-height:600px) {
       html,body { height:100%; }
@@ -605,7 +617,7 @@
 <main class="app">
   <div class="topbar">
     <div class="title">Animation Coach</div>
-    <div class="badge">v1.1</div>
+    <div class="badge">v1.2</div>
   </div>
 
   <div class="tabs" role="tablist">
@@ -1137,14 +1149,19 @@
       </div>
       <div id="cloudSignedIn" class="hidden">
         <div id="cloudAccount" class="cloud-account"></div>
-        <div class="row">
-          <button class="btn small primary" id="cloudSyncNow">今すぐ同期</button>
+        <div class="cloud-summary">
+          <div id="cloudSummary"></div>
+          <div id="cloudLastSync"></div>
+        </div>
+        <div class="cloud-actions">
+          <button class="btn small primary" id="cloudSaveCurrent">この動画をクラウド保存</button>
+          <button class="btn small" id="cloudSyncNow">全端末を同期</button>
           <button class="btn small" id="cloudSignOut">ログアウト</button>
         </div>
       </div>
       <progress id="cloudProgress" class="cloud-progress hidden" max="1" value="0"></progress>
       <div id="cloudMessage" class="status" aria-live="polite"></div>
-      <div class="help">同じアカウントでログインすると、プロジェクト、動画、メモ、書き込み、分析結果が同期されます。端末内にも保存されるため、オフラインでも編集できます。</div>
+      <div class="help">同じアカウントでログインすると、プロジェクト、動画、メモ、書き込み、分析結果が同期されます。動画は非公開で保存され、オフライン中の変更は通信復帰後に自動同期されます。</div>
     </div>
 
     <div class="section-title" style="margin-top:16px;">自動保存プロジェクト</div>
@@ -1599,8 +1616,8 @@
   resizeCanvas(); renderMemos(); update();
 })();
 </script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://cdn.jsdelivr.net/npm/tus-js-client@4/dist/tus.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.2"></script>
+<script src="https://cdn.jsdelivr.net/npm/tus-js-client@4.3.1/dist/tus.min.js"></script>
 <script src="./cloud-config.js"></script>
 <script src="./cloud-sync.js"></script>
 <script src="./app.js"></script>

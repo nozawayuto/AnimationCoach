@@ -638,6 +638,7 @@
     renderCompareUi();
     renderAnalysisUi();
     renderReviewUi();
+    window.AnimationCoachCloud?.onProjectChanged?.(projectId);
     applyViewTransform();
     applyLayerVisibility();
     updateHud(true);
@@ -959,6 +960,7 @@
     localStorage.setItem(LAST_PROJECT_KEY, projectId);
     restoring = false;
     await saveProjectNow({ refreshList: true });
+    window.AnimationCoachCloud?.onProjectChanged?.(projectId);
     setStatus('新しいプロジェクトを作りました');
   }
 
